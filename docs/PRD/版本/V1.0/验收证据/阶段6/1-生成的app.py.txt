@@ -1,0 +1,64 @@
+import os
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from openai import OpenAI
+
+app = FastAPI(title="AI 记账小工具")
+
+
+class GenerateRequest(BaseModel):
+    input: str
+
+
+def get_client():
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        return None
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    return OpenAI(api_key=api_key, base_url=base_url)
+
+
+SYSTEM_PROMPT = (
+    "你是一个智能记账助手。用户会用自然语言描述一笔或多笔收支，"
+    "你需要：1) 从文本中提取账目信息（金额、类别、时间、备注、收/支方向）；"
+    "2) 输出结构化的记账条目；3) 如果信息缺失（如金额或方向），主动合理推断或标记待确认；"
+    "4) 用简洁清晰的中文回复，并给出该笔账目的分类建议。"
+    "如果用户询问统计、预算、理财建议，也请结合记账场景给出实用回答。"
+)
+
+
+@app.get("/")
+def root():
+    return {"message": "AI 记账小工具已启动，请使用 POST /generate 接口。"}
+
+
+@app.post("/generate")
+def generate(req: GenerateRequest):
+    client = get_client()
+    if client is None:
+        raise HTTPException(status_code=500, detail="缺少 DEEPSEEK_API_KEY")
+
+    model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": req.input},
+            ],
+            temperature=0.3,
+            stream=False,
+        )
+        result = response.choices[0].message.content
+        if result is None:
+            result = ""
+        return {"result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"调用模型失败: {str(e)}")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)

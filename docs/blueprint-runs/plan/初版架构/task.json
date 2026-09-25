@@ -1,0 +1,9 @@
+{
+  "project": "Agent造物坊",
+  "mode": "plan",
+  "mock": false,
+  "inputs": {
+    "input": "docs/PRD/PRD.md",
+    "idea": null
+  }
+}

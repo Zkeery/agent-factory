@@ -1,0 +1,297 @@
+{
+  "root": "/Users/zoe/Documents/happy/项目开发必备文档/projects/Agent造物坊",
+  "readme": "# Agent造物坊\n\n本目录集中保存本项目的需求、文档、代码、测试和运行数据。用编码工具单独打开本目录，读取 `AGENTS.md` 即可继续开发。\n\n## 当前状态\n\n阶段 2 后端 MVP 第 1、2 子阶段（工厂内核 + 接真实模型）已实现并验证。进度与决策见 [项目状态](docs/项目状态.md)，文档导航见 [docs/README.md](docs/README.md)，技术方案见 [第 1 阶段技术开发文档](docs/PRD/版本/V1.0/技术文档/第1阶段技术开发文档.md)。\n\n## 启动与验证\n\n```sh\ncd backend\npython3.12 -m venv .venv\n.venv/bin/pip install -r requirements.txt\n.venv/bin/uvicorn app.main:app --port 8010\n```\n\n- 验收界面：http://127.0.0.1:8010/ （输入想法 → 回答决策卡 → 确认 PRD → 闸门通过）\n- 接口文档：http://127.0.0.1:8010/docs\n- 运行测试：`cd backend && .venv/bin/python -m pytest -q`\n- 配置：`backend/.env.example`（复制为 `.env`，默认 mock，零真实 Key）\n\n## 文件位置\n\n| 内容 | 位置 |\n| --- | --- |\n| 项目身份、开发端口 | `project.json` |\n| 需求和附件 | `docs/PRD/` |\n| 技术适配、架构与开发阶段文档 | `docs/PRD/版本/V1.0/技术文档/` |\n| 正式蓝图运行结果 | `docs/blueprint-runs/<plan或audit>/<任务>/` |\n| 验收证据 | `docs/PRD/版本/V1.0/验收证据/` |\n| 后端、测试及其依赖 | `backend/`（按需创建） |\n| 前端及其依赖 | `frontend/`（按需创建） |\n| 业务配置、蓝图配置 | `.env`、`.env.blueprint`（本地创建） |\n| 数据库、上传、运行日志 | `data/`、`logs/`（按需创建） |\n\n后端预留端口 `8010`，前端预留端口 `3010`。它们是约定值，不代表服务已实现或端口已被系统保留。\n\n## 共享开发工具\n\n需求访谈、架构设计、开发验收的衔接见 [多项目开发指南](../../docs/多项目开发指南.md)。共享手册和蓝图留在仓库公共区，本项目的运行产物不写入公共区。\n\n业务启动和测试命令由 AI 在实际实现后补充；不要套用其他项目的模型、端口或数据库配置。\n",
+  "tree": "backend/\n    app/\n        api/\n            __init__.py\n            runs.py\n        core/\n            __init__.py\n            config.py\n            errors.py\n        models/\n            __init__.py\n        schemas/\n            __init__.py\n        services/\n            prompts/\n            engine.py\n            evidence.py\n            gates.py\n            llm.py\n            mock_llm.py\n            parsing.py\n            stages.py\n        static/\n            index.html\n        __init__.py\n        main.py\n    scripts/\n        monitor.py\n    tests/\n        __init__.py\n        conftest.py\n        test_api.py\n        test_engine.py\n        test_failure.py\n        test_llm.py\n    .env.example\n    requirements.txt\ndocs/\n    PRD/\n        版本/\n            V1.0/\n        PRD.md\n        PRD补全清单.md\n        版本记录.md\n    README.md\n    项目状态.md\n.env.example\nAGENTS.md\nCLAUDE.md\nREADME.md\nproject.json",
+  "file_count": 52,
+  "ext_counts": {
+    ".example": 2,
+    ".md": 18,
+    ".json": 1,
+    ".txt": 1,
+    ".py": 23,
+    ".html": 1,
+    ".png": 6
+  },
+  "dependencies": [],
+  "llm_sdks": {
+    "openai": [
+      "backend/app/services/llm.py:54"
+    ]
+  },
+  "components": {
+    "s01": {
+      "id": "s01",
+      "strength": "strong",
+      "code_files": 4,
+      "doc_files": 0,
+      "hits": [
+        {
+          "file": "backend/app/api/runs.py",
+          "line": 163,
+          "pattern": "while\\s+True",
+          "text": "while True:"
+        },
+        {
+          "file": "backend/app/services/engine.py",
+          "line": 88,
+          "pattern": "while\\s+True",
+          "text": "while True:"
+        },
+        {
+          "file": "backend/app/services/llm.py",
+          "line": 63,
+          "pattern": "chat\\.completions",
+          "text": "resp = self.client.chat.completions.create("
+        },
+        {
+          "file": "backend/scripts/monitor.py",
+          "line": 162,
+          "pattern": "while\\s+True",
+          "text": "while True:"
+        }
+      ]
+    },
+    "s02": {
+      "id": "s02",
+      "strength": "weak",
+      "code_files": 1,
+      "doc_files": 0,
+      "hits": [
+        {
+          "file": "backend/app/services/mock_llm.py",
+          "line": 63,
+          "pattern": "def run_\\w+\\(",
+          "text": "\"def run_pipeline(user_input: str) -> str:\\n\""
+        }
+      ]
+    },
+    "s03": {
+      "id": "s03",
+      "strength": "strong",
+      "code_files": 2,
+      "doc_files": 0,
+      "hits": [
+        {
+          "file": "backend/app/services/engine.py",
+          "line": 34,
+          "pattern": "is_relative_to",
+          "text": "if not d.is_relative_to(DATA_ROOT.resolve()):"
+        },
+        {
+          "file": "backend/app/services/evidence.py",
+          "line": 18,
+          "pattern": "is_relative_to",
+          "text": "if not d.is_relative_to(DATA_ROOT.resolve()):"
+        }
+      ]
+    },
+    "s04": {
+      "id": "s04",
+      "strength": "none",
+      "code_files": 0,
+      "doc_files": 0,
+      "hits": []
+    },
+    "s05": {
+      "id": "s05",
+      "strength": "weak",
+      "code_files": 1,
+      "doc_files": 2,
+      "hits": [
+        {
+          "file": "backend/app/services/mock_llm.py",
+          "line": 64,
+          "pattern": "\\btodos?\\b",
+          "text": "\"    # TODO: 接入真实模型与业务逻辑\\n\""
+        }
+      ]
+    },
+    "s06": {
+      "id": "s06",
+      "strength": "none",
+      "code_files": 0,
+      "doc_files": 0,
+      "hits": []
+    },
+    "s07": {
+      "id": "s07",
+      "strength": "none",
+      "code_files": 0,
+      "doc_files": 1,
+      "hits": []
+    },
+    "s08": {
+      "id": "s08",
+      "strength": "none",
+      "code_files": 0,
+      "doc_files": 0,
+      "hits": []
+    },
+    "s09": {
+      "id": "s09",
+      "strength": "none",
+      "code_files": 0,
+      "doc_files": 0,
+      "hits": []
+    },
+    "s10": {
+      "id": "s10",
+      "strength": "none",
+      "code_files": 0,
+      "doc_files": 0,
+      "hits": []
+    },
+    "s11": {
+      "id": "s11",
+      "strength": "weak",
+      "code_files": 1,
+      "doc_files": 1,
+      "hits": [
+        {
+          "file": "backend/app/services/engine.py",
+          "line": 136,
+          "pattern": "threading\\.Thread",
+          "text": "threading.Thread(target=advance_run, args=(run_id,), daemon=True).start()"
+        }
+      ]
+    },
+    "s12": {
+      "id": "s12",
+      "strength": "weak",
+      "code_files": 1,
+      "doc_files": 0,
+      "hits": [
+        {
+          "file": "backend/scripts/monitor.py",
+          "line": 21,
+          "pattern": "interval",
+          "text": "INTERVAL = 30                                       # 秒"
+        },
+        {
+          "file": "backend/scripts/monitor.py",
+          "line": 161,
+          "pattern": "interval",
+          "text": "f.write(f\"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 看门狗启动，每 {INTERVAL}s 检查一次（含蓝图 plan/audit）\\n\")"
+        },
+        {
+          "file": "backend/scripts/monitor.py",
+          "line": 167,
+          "pattern": "interval",
+          "text": "time.sleep(INTERVAL)"
+        }
+      ]
+    },
+    "s13": {
+      "id": "s13",
+      "strength": "none",
+      "code_files": 0,
+      "doc_files": 0,
+      "hits": []
+    },
+    "s14": {
+      "id": "s14",
+      "strength": "none",
+      "code_files": 0,
+      "doc_files": 1,
+      "hits": []
+    },
+    "s15": {
+      "id": "s15",
+      "strength": "none",
+      "code_files": 0,
+      "doc_files": 2,
+      "hits": []
+    },
+    "s16": {
+      "id": "s16",
+      "strength": "weak",
+      "code_files": 1,
+      "doc_files": 0,
+      "hits": [
+        {
+          "file": "backend/app/services/mock_llm.py",
+          "line": 63,
+          "pattern": "pipeline\\(",
+          "text": "\"def run_pipeline(user_input: str) -> str:\\n\""
+        }
+      ]
+    },
+    "s17": {
+      "id": "s17",
+      "strength": "strong",
+      "code_files": 2,
+      "doc_files": 3,
+      "hits": [
+        {
+          "file": "backend/app/services/mock_llm.py",
+          "line": 46,
+          "pattern": "goal",
+          "text": "\"goal_users\": f\"围绕「{idea}」的目标用户（决策 Q1：{answers.get('Q1', '')}）\","
+        },
+        {
+          "file": "backend/app/services/parsing.py",
+          "line": 23,
+          "pattern": "goal",
+          "text": "goal_users: str = \"\""
+        }
+      ]
+    }
+  },
+  "acceptance": {
+    "runnable": {
+      "name": "可运行",
+      "status": "pass",
+      "evidence": [
+        "backend/scripts/monitor.py",
+        ".env.example",
+        "backend/.env.example"
+      ]
+    },
+    "fault_tolerant": {
+      "name": "可容错",
+      "status": "pass",
+      "evidence": [
+        "backend/app/services/engine.py:125",
+        "backend/app/services/llm.py:57",
+        "backend/scripts/monitor.py:34"
+      ]
+    },
+    "observable": {
+      "name": "可观测",
+      "status": "pass",
+      "evidence": [
+        "backend/app/main.py:4",
+        "backend/app/services/engine.py:5",
+        "backend/app/services/llm.py:4"
+      ]
+    },
+    "testable": {
+      "name": "可测试",
+      "status": "pass",
+      "evidence": [
+        "backend/tests/test_api.py",
+        "backend/tests/test_engine.py",
+        "backend/tests/test_failure.py",
+        "backend/tests/test_llm.py"
+      ]
+    },
+    "deployable": {
+      "name": "可部署",
+      "status": "partial",
+      "evidence": []
+    },
+    "measurable": {
+      "name": "可度量",
+      "status": "fail",
+      "evidence": []
+    }
+  },
+  "config_files": [
+    ".env.example",
+    "backend/.env.example"
+  ],
+  "entry_points": [
+    "backend/scripts/monitor.py"
+  ],
+  "source_digest": "7a3da21755d7e01770c7162af28985e28ba0d3fa4b5b34be17c030ba3afa2baa"
+}

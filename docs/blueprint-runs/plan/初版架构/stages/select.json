@@ -1,0 +1,123 @@
+{
+  "components": [
+    {
+      "id": "s01",
+      "name": "Agent Loop",
+      "decision": "必选",
+      "reason": "一切基础：循环 + 工具（一切基础，恒选）",
+      "feature": ""
+    },
+    {
+      "id": "s02",
+      "name": "工具系统",
+      "decision": "必选",
+      "reason": "需要调用外部系统/API/数据源（一切基础，恒选）",
+      "feature": ""
+    },
+    {
+      "id": "s03",
+      "name": "权限系统",
+      "decision": "必选",
+      "reason": "安全红线明确要求高风险/不可逆/涉及费用/对外的动作由确定性代码+人工确认约束，不交给模型自主决定。",
+      "feature": "destructive_ops"
+    },
+    {
+      "id": "s04",
+      "name": "钩子系统",
+      "decision": "必选",
+      "reason": "要求交付证据包、长期保留PRD/项目状态/决策台账/证据包用于追溯，且每阶段闸门检查。",
+      "feature": "audit_needed"
+    },
+    {
+      "id": "s05",
+      "name": "任务规划",
+      "decision": "必选",
+      "reason": "主链路为阶段0到阶段5的多阶段分步流程，每阶段需执行、闸门检查、交付证据包和人工确认。",
+      "feature": "multi_step"
+    },
+    {
+      "id": "s06",
+      "name": "子 Agent",
+      "decision": "待确认",
+      "reason": "输入未说明：是否会出现上下文爆炸的子任务，或可并行的探索型子任务？",
+      "feature": "context_heavy"
+    },
+    {
+      "id": "s07",
+      "name": "技能加载",
+      "decision": "待确认",
+      "reason": "输入未说明：领域知识库是否庞大、需要按需加载？",
+      "feature": "large_knowledge"
+    },
+    {
+      "id": "s08",
+      "name": "上下文压缩",
+      "decision": "待确认",
+      "reason": "输入未说明：会话是否很长、工具输出或日志量是否很大？",
+      "feature": "long_sessions"
+    },
+    {
+      "id": "s09",
+      "name": "记忆系统",
+      "decision": "必选",
+      "reason": "要求长期保留每个产品的PRD、项目状态、决策台账和证据包，用于追溯和复用。",
+      "feature": "cross_session_memory"
+    },
+    {
+      "id": "s10",
+      "name": "任务系统",
+      "decision": "必选",
+      "reason": "要求业务数据、长任务状态、人工确认点必须持久化，进程重启后可恢复。",
+      "feature": "persistent_goals"
+    },
+    {
+      "id": "s11",
+      "name": "后台任务",
+      "decision": "必选",
+      "reason": "企业实名认证耗时数天，并明确阶段0起并行去办。",
+      "feature": "slow_operations"
+    },
+    {
+      "id": "s12",
+      "name": "定时调度",
+      "decision": "待确认",
+      "reason": "输入未说明：是否需要定时自动触发？",
+      "feature": "scheduled"
+    },
+    {
+      "id": "s13",
+      "name": "Agent 团队",
+      "decision": "待确认",
+      "reason": "输入未说明：是否需要多任务并行且各自隔离工作区（多 Agent 团队）？",
+      "feature": "parallel_isolated"
+    },
+    {
+      "id": "s14",
+      "name": "MCP 插件",
+      "decision": "待确认",
+      "reason": "输入未说明：是否需要接入外部工具生态（MCP、第三方插件）？",
+      "feature": "external_ecosystem"
+    },
+    {
+      "id": "s15",
+      "name": "集成 Harness",
+      "decision": "必选",
+      "reason": "第一版已选 8 个可选组件（s03, s04, s05, s09, s10, s11, s16, s17），需归一到单一循环",
+      "feature": ""
+    },
+    {
+      "id": "s16",
+      "name": "工作流运行时",
+      "decision": "必选",
+      "reason": "AI按固定工序推进，步骤为拆需求→定架构→写代码→测试→上线，且MVP明确为固定流程AI应用。",
+      "feature": "fixed_orchestration"
+    },
+    {
+      "id": "s17",
+      "name": "目标闭环",
+      "decision": "必选",
+      "reason": "每阶段有闸门检查（十项是否表）和证据包，并要求不靠删测试、降标准、mock冒充通过。",
+      "feature": "auto_completion"
+    }
+  ]
+}

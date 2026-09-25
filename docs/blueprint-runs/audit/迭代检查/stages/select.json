@@ -1,0 +1,123 @@
+{
+  "components": [
+    {
+      "id": "s01",
+      "name": "Agent Loop",
+      "decision": "必选",
+      "reason": "一切基础：循环 + 工具（一切基础，恒选）",
+      "feature": ""
+    },
+    {
+      "id": "s02",
+      "name": "工具系统",
+      "decision": "必选",
+      "reason": "需要调用外部系统/API/数据源（一切基础，恒选）",
+      "feature": ""
+    },
+    {
+      "id": "s03",
+      "name": "权限系统",
+      "decision": "放弃",
+      "reason": "现有材料只见「生成文档/蓝图产物写入 docs/blueprint-runs」，未见删除、写外部系统、支付、发消息等敏感操作。",
+      "feature": "destructive_ops"
+    },
+    {
+      "id": "s04",
+      "name": "钩子系统",
+      "decision": "必选",
+      "reason": "项目设有 docs/PRD/版本/V1.0/验收证据/ 目录，并存在 blueprint-runs/audit 类型产物，说明需要证据与审核记录。",
+      "feature": "audit_needed"
+    },
+    {
+      "id": "s05",
+      "name": "任务规划",
+      "decision": "必选",
+      "reason": "核心闭环为「输入想法 → 回答决策卡 → 确认 PRD → 闸门通过」多步骤流程，且有 services/stages.py 与 gates.py。",
+      "feature": "multi_step"
+    },
+    {
+      "id": "s06",
+      "name": "子 Agent",
+      "decision": "二期",
+      "reason": "当前为单条想法 → 决策卡 → PRD 的线性流程，未见并行探索型子任务；扫描 s06 强度为 none，随蓝图规模增长可能成为问题。",
+      "feature": "context_heavy"
+    },
+    {
+      "id": "s07",
+      "name": "技能加载",
+      "decision": "二期",
+      "reason": "docs/ 下已有较多领域文档（PRD、技术文档），但扫描未发现按需加载知识库的机制（s07 none）。",
+      "feature": "large_knowledge"
+    },
+    {
+      "id": "s08",
+      "name": "上下文压缩",
+      "decision": "待确认",
+      "reason": "输入未说明：会话是否很长、工具输出或日志量是否很大？",
+      "feature": "long_sessions"
+    },
+    {
+      "id": "s09",
+      "name": "记忆系统",
+      "decision": "二期",
+      "reason": "目录含 backend/app/models/（当前为空 __init__.py）与 data/ 目录规划，可能用于持久化，但未实现跨会话记忆。",
+      "feature": "cross_session_memory"
+    },
+    {
+      "id": "s10",
+      "name": "任务系统",
+      "decision": "二期",
+      "reason": "存在 blueprint-runs/ 运行结果目录与 project.json 项目身份，暗示可续跑，但未见断点续跑的引擎实现。",
+      "feature": "persistent_goals"
+    },
+    {
+      "id": "s11",
+      "name": "后台任务",
+      "decision": "必选",
+      "reason": "调真实大模型生成 PRD/蓝图属长耗时操作，engine.py 中已有相关处理点（s11 weak）。",
+      "feature": "slow_operations"
+    },
+    {
+      "id": "s12",
+      "name": "定时调度",
+      "decision": "二期",
+      "reason": "backend/scripts/monitor.py 存在定时/周期监控迹象（s12 weak），但非业务主流程的定时触发。",
+      "feature": "scheduled"
+    },
+    {
+      "id": "s13",
+      "name": "Agent 团队",
+      "decision": "二期",
+      "reason": "blueprint-runs/<任务>/ 以任务隔离目录，具备隔离基础，但未见多 Agent 并行团队机制（s13 none）。",
+      "feature": "parallel_isolated"
+    },
+    {
+      "id": "s14",
+      "name": "MCP 插件",
+      "decision": "放弃",
+      "reason": "扫描 s14 强度为 none，仅接入 openai SDK，未发现 MCP 或第三方插件接入。",
+      "feature": "external_ecosystem"
+    },
+    {
+      "id": "s15",
+      "name": "集成 Harness",
+      "decision": "必选",
+      "reason": "第一版已选 5 个可选组件（s04, s05, s11, s16, s17），需归一到单一循环",
+      "feature": ""
+    },
+    {
+      "id": "s16",
+      "name": "工作流运行时",
+      "decision": "必选",
+      "reason": "流程固定为 想法 → 决策卡 → PRD → 闸门，且由 services/stages.py 与 gates.py 固化阶段。",
+      "feature": "fixed_orchestration"
+    },
+    {
+      "id": "s17",
+      "name": "目标闭环",
+      "decision": "必选",
+      "reason": "存在 gates.py 与 parsing.py，用于判定闸门通过与否（s17 strong，mock_llm.py:46、parsing.py:23）。",
+      "feature": "auto_completion"
+    }
+  ]
+}

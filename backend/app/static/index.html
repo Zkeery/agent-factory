@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent造物坊 · 工厂内核验收界面</title>
+<style>
+  :root { --bg:#f7f7f9; --card:#fff; --line:#e5e5e9; --text:#1f2329; --muted:#8a8f98; --accent:#4f6bfe; --ok:#16a34a; --warn:#d97706; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:720px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  textarea { width:100%; min-height:88px; border:1px solid var(--line); border-radius:8px; padding:10px; font:inherit; resize:vertical; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 18px; font:inherit; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  .stage { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; background:#eef1ff; color:var(--accent); }
+  .stage.ok { background:#e8f8ee; color:var(--ok); }
+  .stage.fail { background:#fdeaea; color:#c0392b; }
+  .steps { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 4px; }
+  .step { font-size:12px; padding:4px 10px; border-radius:999px; background:#eee; color:var(--muted); }
+  .step.done { background:#e8f8ee; color:var(--ok); }
+  .step.now { background:#eef1ff; color:var(--accent); font-weight:600; }
+  .q { border-left:3px solid var(--accent); padding:4px 0 4px 12px; margin:12px 0; }
+  .q .opt { color:var(--muted); font-size:13px; margin:4px 0; }
+  .q input { width:100%; border:1px solid var(--line); border-radius:6px; padding:8px; font:inherit; margin-top:6px; }
+  .ev { font-size:13px; padding:6px 0; border-bottom:1px dashed var(--line); }
+  .muted { color:var(--muted); }
+  .log { max-height:200px; overflow:auto; font-size:12px; background:#0f1115; color:#c9d1d9; border-radius:8px; padding:10px; font-family:ui-monospace,monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Agent造物坊 · 工厂内核</h1>
+  <div class="sub">第 1 阶段验收界面（mock 闭环，零真钱成本）——验证「想法 → 闸门通过」的固定工序能否稳定运转</div>
+
+  <div class="card">
+    <label>输入一个产品想法</label>
+    <textarea id="idea" placeholder="例如：做一个给宠物起名字的小工具"></textarea>
+    <button id="submit">提交，启动流水线</button>
+  </div>
+
+  <div class="card" id="statusCard" style="display:none">
+    <div><span class="stage" id="stageBadge">-</span> <span class="muted" id="statusText"></span></div>
+    <div class="steps" id="steps"></div>
+  </div>
+
+  <div class="card" id="decisionsCard" style="display:none">
+    <b>需求澄清（回答决策卡）</b>
+    <div id="decisions"></div>
+  </div>
+
+  <div class="card" id="prdCard" style="display:none">
+    <b>PRD 草稿</b>
+    <div id="prd" class="muted"></div>
+    <button id="confirmPrd">确认 PRD</button>
+  </div>
+
+  <div class="card" id="evidenceCard" style="display:none">
+    <b>证据包</b>
+    <div id="evidence"></div>
+  </div>
+
+  <div class="card" id="scoreCard" style="display:none">
+    <b>给本次产品打分（1=差 2=可用 3=好）</b>
+    <div style="margin-top:8px">
+      决策卡 <select id="scoreDecision"><option>3</option><option>2</option><option>1</option></select>
+      PRD <select id="scorePrd"><option>3</option><option>2</option><option>1</option></select>
+      代码 <select id="scoreCode"><option>3</option><option>2</option><option>1</option></select>
+      <button id="submitScore">提交打分</button>
+    </div>
+  </div>
+
+  <div class="card" id="logCard" style="display:none">
+    <b>进度日志</b>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="card">
+    <b>工厂度量</b>
+    <div id="metrics" class="muted">加载中…</div>
+  </div>
+</div>
+
+<script>
+const STEPS = ["idea_submitted","clarifying","awaiting_answers","prd_drafting","awaiting_prd_confirm","building","testing","deploying","evidence_ready","gate_passed","failed"];
+const STEP_CN = {
+  idea_submitted:"提交想法", clarifying:"澄清中", awaiting_answers:"等待回答", prd_drafting:"生成PRD",
+  awaiting_prd_confirm:"待确认PRD", building:"构建中", testing:"测试中", deploying:"部署中", evidence_ready:"整理证据", gate_passed:"闸门通过", gate_failed:"闸门失败", failed:"失败"
+};
+let runId = null, eventSource = null;
+
+function log(msg){ const el=document.getElementById('log'); el.textContent += msg + "\n"; el.scrollTop = el.scrollHeight; document.getElementById('logCard').style.display='block'; }
+function setStage(s){ const b=document.getElementById('stageBadge'); b.textContent = STEP_CN[s]||s; b.className = 'stage ' + (s==='gate_passed'?'ok':((s==='gate_failed'||s==='failed')?'fail':'')); document.getElementById('statusCard').style.display='block'; }
+
+function renderSteps(current){
+  const idx = STEPS.indexOf(current);
+  document.getElementById('steps').innerHTML = STEPS.map((s,i)=>{
+    let cls = 'step'; if(i < idx) cls += ' done'; else if(i === idx) cls += ' now';
+    return '<span class="'+cls+'">'+STEP_CN[s]+'</span>';
+  }).join('');
+}
+
+document.getElementById('submit').onclick = async () => {
+  const idea = document.getElementById('idea').value.trim();
+  if(!idea){ alert('请先输入想法'); return; }
+  const btn = document.getElementById('submit');
+  btn.disabled = true;  // 防止重复提交
+  try {
+    const res = await fetch('/api/v1/runs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({idea})});
+    const data = await res.json();
+    runId = data.id;
+    log('已提交，运行 ID：' + runId);
+    openEvents();
+  } catch(e) {
+    btn.disabled = false;  // 失败恢复
+    alert('提交失败，请重试');
+  }
+};
+
+function openEvents(){
+  if(eventSource) eventSource.close();
+  eventSource = new EventSource('/api/v1/runs/' + runId + '/events');
+  eventSource.addEventListener('chunk', e => {
+    const d = JSON.parse(e.data);
+    setStage(d.stage); renderSteps(d.stage);
+    log('['+STEP_CN[d.stage]+'] ' + (d.payload ? d.payload : ''));
+    if(d.stage === 'awaiting_answers') loadDecisions();
+    if(d.stage === 'awaiting_prd_confirm') loadPrd();
+    if(d.stage === 'gate_passed' || d.stage === 'gate_failed') loadEvidence();
+  });
+  eventSource.addEventListener('done', e => {
+    const d = JSON.parse(e.data);
+    setStage(d.stage); renderSteps(d.stage); eventSource.close();
+    loadEvidence();
+  });
+  eventSource.addEventListener('error', e => { log('流异常或已结束'); });
+}
+
+async function loadDecisions(){
+  const res = await fetch('/api/v1/runs/' + runId); const data = await res.json();
+  const card = document.getElementById('decisionsCard'); card.style.display='block';
+  card.innerHTML = '<b>需求澄清（回答决策卡）</b><div id="decisions"></div>';
+  const container = document.getElementById('decisions');
+  data.decisions.forEach(d => {
+    const div = document.createElement('div'); div.className='q';
+    div.innerHTML = '<div>'+d.question+'</div><div class="opt">'+d.options+'</div><div class="muted" style="font-size:12px">推荐：'+d.recommendation+'</div>' +
+      (d.status==='answered' ? '<div style="color:var(--ok)">已答：'+d.answer+'</div>' : '<input placeholder="你的回答（或填：按推荐）"> <button class="ghost">提交</button>');
+    container.appendChild(div);
+    if(d.status !== 'answered'){
+      const btn = div.querySelector('button');
+      btn.onclick = async () => {
+        const answer = div.querySelector('input').value.trim() || '按推荐';
+        await fetch('/api/v1/runs/'+runId+'/decisions/'+d.code+'/answer', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({answer})});
+        loadDecisions();
+      };
+    }
+  });
+  // 渲染完成后再滚动到决策卡，引导用户回答
+  setTimeout(() => card.scrollIntoView({behavior:'smooth', block:'start'}), 60);
+}
+
+async function loadPrd(){
+  const res = await fetch('/api/v1/runs/' + runId); const data = await res.json();
+  document.getElementById('prdCard').style.display='block';
+  const prdItem = data.evidence.find(e => e.stage==='prd');
+  const prdEl = document.getElementById('prd');
+  prdEl.textContent = prdItem ? (prdItem.content || prdItem.title) : '（PRD 生成中）';
+  prdEl.style.whiteSpace = 'pre-wrap';
+  prdCard.scrollIntoView({behavior:'smooth', block:'start'});
+  document.getElementById('confirmPrd').onclick = async () => {
+    await fetch('/api/v1/runs/'+runId+'/confirm-prd', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({confirmed:true})});
+    document.getElementById('prdCard').style.display='none';
+  };
+}
+
+async function loadEvidence(){
+  const res = await fetch('/api/v1/runs/' + runId + '/evidence'); const items = await res.json();
+  document.getElementById('evidenceCard').style.display='block';
+  document.getElementById('evidence').innerHTML = items.map(e => '<div class="ev">['+e.stage+'] '+e.title+' <span class="muted">'+e.content_path+'</span></div>').join('');
+  document.getElementById('scoreCard').style.display='block';
+  loadMetrics();
+}
+
+async function loadMetrics(){
+  try {
+    const res = await fetch('/api/v1/metrics'); const m = await res.json();
+    document.getElementById('metrics').innerHTML =
+      '总运行 <b>' + m.total_runs + '</b>' +
+      ' · 稳定出货率 <b>' + (m.ship_rate*100).toFixed(1) + '%</b>' +
+      ' · 平均耗时 <b>' + m.avg_duration + 's</b>' +
+      ' · 平均成本 <b>¥' + m.avg_cost.toFixed(4) + '</b>' +
+      (m.quality_rate != null ? ' · 合格率 <b>' + (m.quality_rate*100).toFixed(0) + '%</b>（'+m.scored_runs+'款已打分）' : ' · 合格率 待打分');
+  } catch(e) { document.getElementById('metrics').textContent = '度量加载失败'; }
+}
+
+document.getElementById('submitScore').onclick = async () => {
+  const body = {
+    decision: +document.getElementById('scoreDecision').value,
+    prd: +document.getElementById('scorePrd').value,
+    code: +document.getElementById('scoreCode').value,
+  };
+  await fetch('/api/v1/runs/'+runId+'/score', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  loadMetrics();
+  alert('已打分');
+};
+
+loadMetrics();
+</script>
+</body>
+</html>

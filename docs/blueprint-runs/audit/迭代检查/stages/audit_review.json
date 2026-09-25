@@ -1,0 +1,66 @@
+{
+  "ok": false,
+  "issues": [
+    {
+      "component": "s04",
+      "problem": "理由称「项目设有 docs/PRD/版本/V1.0/验收证据/ 目录，并存在 blueprint-runs/audit 类型产物」，该事实未出现在给定输入（反推意图）中，也无扫描证据；同时「验收证据目录/audit 产物」只能说明有审核与记录需求，不能直接推出「钩子系统（s04_hooks，事件钩子）」必选属 P0，属理由超出输入、判断跳跃。",
+      "severity": "medium"
+    },
+    {
+      "component": "s15",
+      "problem": "理由「第一版已选 5 个可选组件（s04, s05, s11, s16, s17），需归一到单一循环」中，s17 在差距表中并未列为第一版可选组件（s17 已被判定为 strong/已具备），且「已选 5 个」这一前提无输入出处；另 s15 属元组件，其 P0 判断应说明与产品意图（一句话想法推导 PRD 蓝图单一闭环）的关系，当前理由来自程序内部选择而非产品意图。",
+      "severity": "medium"
+    },
+    {
+      "component": "s02",
+      "problem": "证据行 backend/app/services/mock_llm.py:63 内容是 run_pipeline 定义，与「调用外部系统/API/数据源」的工具系统能力无直接对应；理由「一切基础，恒选」是通用假设，未与产品意图（推导 PRD 蓝图流程）建立关系。s01 证据含 llm.py:63、s17 含 mock_llm.py:46/parsing.py:23，更接近真实/结构化模型调用，应据此复核 s02 是否应为 weak 或需换证据。",
+      "severity": "high"
+    },
+    {
+      "component": "s05",
+      "problem": "证据行 backend/app/services/mock_llm.py:64 是「# TODO: 接入真实模型与业务逻辑」注释，未体现任务规划（todo/待办规划）能力；理由提到的 services/stages.py 与 gates.py 未出现在证据表、也未见于反推意图的 facts 出处（仅 gates 以目录形式出现且被 s01/s03/s16 引用），证据与结论不匹配。",
+      "severity": "medium"
+    },
+    {
+      "component": "s16",
+      "problem": "证据 backend/app/services/mock_llm.py:63（run_pipeline 定义）与工作流运行时的对应关系薄弱；理由称 services/stages.py 固化阶段，但该文件在证据表与反推意图出处中均未出现，属未证实的引述。",
+      "severity": "medium"
+    },
+    {
+      "component": "s06",
+      "problem": "「二期补齐」的结论缺少对产品意图的引用（意图未提出并行探索型子任务需求），仅以「扫描 none、随规模增长可能成为问题」推测，判定依据不足；至少应注明为待确认而非既定二期项。",
+      "severity": "low"
+    },
+    {
+      "component": "s07",
+      "problem": "「docs/ 下已有较多领域文档（PRD、技术文档）」中「技术文档」未在输入中出现，反推意图仅载明 docs/PRD/PRD.md、docs/PRD/PRD补全清单.md；事实扩张，需按输入订正。",
+      "severity": "medium"
+    },
+    {
+      "component": "s09",
+      "problem": "理由「目录含 backend/app/models/（当前为空 __init__.py）与 data/ 目录规划」中，models 目录与空 __init__ 的具体状态未出现在给定输入（data/ 仅作为数据库/上传/运行日志目录在约束中提及），属证据外推；据此判定二期补齐的依据不足。",
+      "severity": "medium"
+    },
+    {
+      "component": "s10",
+      "problem": "理由「存在 blueprint-runs/ 运行结果目录与 project.json 项目身份」中，project.json 在输入中无出处（意图仅提到 docs/blueprint-runs/<plan或audit>/<任务>/）；「可续跑」为推测，未与意图绑定，判定依据不足。",
+      "severity": "medium"
+    },
+    {
+      "component": "s13",
+      "problem": "「blueprint-runs/<任务>/ 以任务隔离目录，具备隔离基础」与多 Agent 团队机制无关，隔离目录不能作为团队能力的推断依据；结论与证据之间无因果。",
+      "severity": "low"
+    },
+    {
+      "component": "s11",
+      "problem": "结论本身有 engine.py:136 线程证据支撑，但理由称「调真实大模型生成 PRD/蓝图属长耗时操作」在意图中未明示（默认 mock 可零 Key 运行、真实模型接入为扫描线索），属对耗时特性的假设，宜标注待确认。",
+      "severity": "low"
+    },
+    {
+      "component": "s12",
+      "problem": "证据（monitor.py 的 INTERVAL/sleep/看门狗）与「定时调度」的对应成立，且已自述「非业务主流程」，判定尚可；但 P2「二期加固」未说明产品意图中是否存在周期性任务需求，宜补充为待确认。",
+      "severity": "low"
+    }
+  ],
+  "summary": "差距表存在多处证据与结论不匹配：s04、s15 的理由引用了输入中不存在的事实（验收证据目录、s17 属第一版可选组件），s05、s16 引用的 stages.py/gates.py 阶段固化未列证据，s09、s10 的 models 空目录与 project.json 也超出输入。s02 以 run_pipeline 定义支撑「工具系统」尤为牵强，另有 s07「技术文档」、s13「隔离目录推断团队机制」等外推。建议：删除输入中无出处的事实，重新锚定证据行，并将无产品意图依据的 P0 判断降级或标注待确认。"
+}

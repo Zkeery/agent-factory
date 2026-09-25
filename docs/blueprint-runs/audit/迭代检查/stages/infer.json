@@ -1,0 +1,109 @@
+{
+  "title": "Agent造物坊",
+  "one_liner": "给需要造 Agent 产品的开发者用，把一句话想法经决策问答与闸门校验逐步推导为 PRD 蓝图并跑出正式蓝图运行结果。",
+  "product_summary": "这是一个「Agent 产品/蓝图的工厂」项目，当前处于阶段 2 后端 MVP 的第 1、2 子阶段（工厂内核 + 接真实模型），已实现并验证。用户在后端验收界面输入想法，回答系统给出的决策卡，确认 PRD，并通过闸门校验。后端用 FastAPI 提供接口，服务层包含 engine、llm、mock_llm、gates、parsing、stages、evidence、prompts 等模块，默认 mock 模式可零真实 Key 运行，也可通过 openai SDK 接真实模型。项目正式产物写入 docs/blueprint-runs/<plan或audit>/<任务>/，文档体系（PRD、技术文档、验收证据、项目状态）较为完整，但可度量性尚未建立，可部署性只是部分具备。",
+  "facts": {
+    "goal": {
+      "value": "把用户的原始想法经「决策卡问答 → PRD 确认 → 闸门校验」的流程推导成正式蓝图并产出运行结果；README 未给出可量化的成功标准",
+      "status": "待确认",
+      "source": "README「验收界面：http://127.0.0.1:8010/ （输入想法 → 回答决策卡 → 确认 PRD → 闸门通过）」；README「正式蓝图运行结果 docs/blueprint-runs/<plan或audit>/<任务>/」"
+    },
+    "users": {
+      "value": "使用者为要开发 Agent 产品的开发/设计者（需求方），以同步交互方式在验收界面按流程回答决策卡；人机比与并发使用形态未在材料中说明",
+      "status": "待确认",
+      "source": "README「用编码工具单独打开本目录，读取 AGENTS.md 即可继续开发」；README「输入想法 → 回答决策卡 → 确认 PRD → 闸门通过」"
+    },
+    "core_loop": {
+      "value": "一次完整闭环：输入想法 → 系统给出决策卡 → 用户逐项回答 → 确认 PRD → 过闸门（gates）→ 产出正式蓝图运行结果，落在 docs/blueprint-runs/<plan或audit>/<任务>/",
+      "status": "明确",
+      "source": "README「输入想法 → 回答决策卡 → 确认 PRD → 闸门通过」；README「正式蓝图运行结果 docs/blueprint-runs/<plan或audit>/<任务>/」；目录 backend/app/services/gates.py"
+    },
+    "deliverable": {
+      "value": "文档型交付物为主：PRD、正式蓝图运行结果（plan / audit 两类）；同时伴随决策卡的问答记录与闸门校验结论",
+      "status": "明确",
+      "source": "README「正式蓝图运行结果 docs/blueprint-runs/<plan或audit>/<任务>/」；目录 docs/PRD/PRD.md、docs/PRD/PRD补全清单.md"
+    },
+    "boundaries": {
+      "value": "不做/未明确允许的事（据现有材料）：本项目的运行产物不写入仓库公共区；共享手册与蓝图留在仓库公共区；不套用其他项目的模型、端口或数据库配置；业务启动和测试命令由 AI 在实际实现后补充，不得照抄其他项目",
+      "status": "明确",
+      "source": "README「共享手册和蓝图留在仓库公共区，本项目的运行产物不写入公共区」；README「不要套用其他项目的模型、端口或数据库配置」；README「业务启动和测试命令由 AI 在实际实现后补充」"
+    },
+    "constraints": {
+      "value": "已知约束：后端预留端口 8010、前端预留端口 3010（为约定值，不代表已实现或被系统保留）；Python 3.12 + venv + uvicorn；默认 mock 可零真实 Key 运行；已接入 openai SDK 用于真实模型；数据库、上传、运行日志放在 data/、logs/ 目录。时延、并发、合规、成本上限未给出",
+      "status": "待确认",
+      "source": "README「后端预留端口 8010，前端预留端口 3010。它们是约定值」；README「python3.12 -m venv .venv」「默认 mock，零真实 Key」；扫描线索 llm_sdks openai backend/app/services/llm.py:54"
+    }
+  },
+  "features": {
+    "destructive_ops": {
+      "value": "no",
+      "evidence": "现有材料只见「生成文档/蓝图产物写入 docs/blueprint-runs」，未见删除、写外部系统、支付、发消息等敏感操作。"
+    },
+    "audit_needed": {
+      "value": "yes",
+      "evidence": "项目设有 docs/PRD/版本/V1.0/验收证据/ 目录，并存在 blueprint-runs/audit 类型产物，说明需要证据与审核记录。"
+    },
+    "multi_step": {
+      "value": "yes",
+      "evidence": "核心闭环为「输入想法 → 回答决策卡 → 确认 PRD → 闸门通过」多步骤流程，且有 services/stages.py 与 gates.py。"
+    },
+    "context_heavy": {
+      "value": "later",
+      "evidence": "当前为单条想法 → 决策卡 → PRD 的线性流程，未见并行探索型子任务；扫描 s06 强度为 none，随蓝图规模增长可能成为问题。"
+    },
+    "large_knowledge": {
+      "value": "later",
+      "evidence": "docs/ 下已有较多领域文档（PRD、技术文档），但扫描未发现按需加载知识库的机制（s07 none）。"
+    },
+    "long_sessions": {
+      "value": "unknown",
+      "evidence": "材料未说明单次会话长度或日志规模，需看实际对话与闸门校验的轮次。"
+    },
+    "cross_session_memory": {
+      "value": "later",
+      "evidence": "目录含 backend/app/models/（当前为空 __init__.py）与 data/ 目录规划，可能用于持久化，但未实现跨会话记忆。"
+    },
+    "persistent_goals": {
+      "value": "later",
+      "evidence": "存在 blueprint-runs/ 运行结果目录与 project.json 项目身份，暗示可续跑，但未见断点续跑的引擎实现。"
+    },
+    "slow_operations": {
+      "value": "yes",
+      "evidence": "调真实大模型生成 PRD/蓝图属长耗时操作，engine.py 中已有相关处理点（s11 weak）。"
+    },
+    "scheduled": {
+      "value": "later",
+      "evidence": "backend/scripts/monitor.py 存在定时/周期监控迹象（s12 weak），但非业务主流程的定时触发。"
+    },
+    "parallel_isolated": {
+      "value": "later",
+      "evidence": "blueprint-runs/<任务>/ 以任务隔离目录，具备隔离基础，但未见多 Agent 并行团队机制（s13 none）。"
+    },
+    "external_ecosystem": {
+      "value": "no",
+      "evidence": "扫描 s14 强度为 none，仅接入 openai SDK，未发现 MCP 或第三方插件接入。"
+    },
+    "fixed_orchestration": {
+      "value": "yes",
+      "evidence": "流程固定为 想法 → 决策卡 → PRD → 闸门，且由 services/stages.py 与 gates.py 固化阶段。"
+    },
+    "auto_completion": {
+      "value": "yes",
+      "evidence": "存在 gates.py 与 parsing.py，用于判定闸门通过与否（s17 strong，mock_llm.py:46、parsing.py:23）。"
+    }
+  },
+  "unknowns": [
+    "这个产品的可量化成功标准是什么（例如多少次蓝图运行算达标、闸门通过率、用户满意度指标）？",
+    "使用者是单个开发者自用，还是要支持多人协作/多租户？是否要求并发与同步响应？",
+    "「决策卡」的生成规则和数量是怎么定的？由模型决定还是模板固定？",
+    "闸门（gates）具体校验哪些内容、失败后能否回退重跑？判定标准由谁定义？",
+    "PRD 确认环节是否需要人工确认、审批人是谁、确认记录保存在哪里？",
+    "调用真实模型的具体供应商、模型名、成本上限与超时预算是多少？是否允许回落到 mock？",
+    "是否涉及合规或敏感数据处理（用户想法内容、PRD 是否含敏感信息）？需要哪些审计与埋点？",
+    "是否需要跨会话记住用户偏好、历史决策？当前 models/ 为空，持久化方案是什么？",
+    "多步骤长会话场景下，是否需要断点续跑与进度跟踪？当前如何恢复中断的蓝图生成？",
+    "blueprint-runs 的 plan 与 audit 两类产物分别对应什么触发条件与产出格式？",
+    "为什么可度量（measurable）验收不通过、可部署（deployable）仅为部分具备？差距在哪里、计划何时补齐？",
+    "前端是否真的有需求（当前 static/index.html 只是简易验收页），还是长期只保留后端 + 接口？"
+  ]
+}

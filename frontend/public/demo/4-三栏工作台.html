@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent造物坊 · 三栏工作台（Grokbot 式）</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --surface:#ffffff; --text:#1a1f2b; --muted:#8a91a0; --line:#e8eaee;
+    --primary:#4f46e5; --primary-2:#7c3aed; --grad:linear-gradient(135deg,#4f46e5,#7c3aed);
+    --shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.06);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;height:100vh;display:flex;flex-direction:column}
+  /* 顶栏 */
+  .topbar{height:52px;flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 16px}
+  .brand{display:flex;align-items:center;gap:9px}
+  .logo{width:30px;height:30px;border-radius:8px;background:var(--grad);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px}
+  .brand b{font-size:15px}
+  /* 三栏 */
+  .cols{flex:1;display:flex;min-height:0}
+  /* 左栏 */
+  .left{width:230px;flex-shrink:0;border-right:1px solid var(--line);display:flex;flex-direction:column;background:var(--surface)}
+  .search{margin:12px 12px 8px;display:flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;color:var(--muted);font-size:13px}
+  .list{flex:1;overflow:auto;padding:0 8px}
+  .item{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:9px;cursor:pointer;font-size:13.5px}
+  .item:hover{background:#f3f4f8}
+  .item.on{background:#eef1ff}
+  .item .dot{width:8px;height:8px;border-radius:50%;background:var(--primary);flex-shrink:0}
+  .item .name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .item .badge{background:#e5e7ee;color:var(--muted);font-size:11px;padding:1px 6px;border-radius:8px}
+  .acct{display:flex;align-items:center;gap:8px;padding:12px;border-top:1px solid var(--line);font-size:13px}
+  .avatar{width:26px;height:26px;border-radius:50%;background:var(--grad);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px}
+  /* 中栏 */
+  .mid{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+  .chathead{height:46px;flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 16px;font-size:14px;font-weight:600}
+  .chat{flex:1;overflow:auto;padding:18px 20px;display:flex;flex-direction:column;gap:14px}
+  .msg{max-width:78%}
+  .msg.user{align-self:flex-end}
+  .msg.ai{align-self:flex-start}
+  .msg .who{font-size:12px;color:var(--muted);margin:0 6px 4px}
+  .msg .bubble{padding:11px 16px;border-radius:20px;font-size:14px;line-height:1.55;box-shadow:0 1px 3px rgba(16,24,40,.07)}
+  .msg.user .bubble{background:var(--grad);color:#fff;border-bottom-right-radius:6px}
+  .msg.ai .bubble{background:var(--surface);border:1px solid var(--line);border-bottom-left-radius:6px}
+  .quick{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px;padding-left:6px}
+  .quick button{border:1.5px solid var(--primary);color:var(--primary);background:#fff;border-radius:999px;padding:7px 16px;font-size:13px;cursor:pointer;transition:.15s}
+  .quick button:hover{background:#eef1ff}
+  .quick button.fill{background:var(--grad);color:#fff;border-color:transparent;box-shadow:0 4px 12px rgba(79,70,229,.25)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px 14px;margin-top:8px;font-size:13px}
+  .card .t{font-weight:600;margin-bottom:6px}
+  .code{background:#0f1420;color:#c9d4e8;border-radius:14px;padding:12px 14px;font-size:12.5px;font-family:ui-monospace,Menlo,monospace;margin-top:8px;line-height:1.6}
+  .inputbar{height:64px;flex-shrink:0;background:var(--surface);border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 14px}
+  .inputbar input{flex:1;border:1.5px solid var(--line);border-radius:999px;padding:12px 20px;font-size:14px;outline:none;font-family:inherit;background:var(--bg);transition:.15s}
+  .inputbar input:focus{border-color:var(--primary);background:#fff}
+  .inputbar button{background:var(--grad);color:#fff;border:none;border-radius:999px;padding:12px 22px;font-size:14px;cursor:pointer;box-shadow:0 4px 12px rgba(79,70,229,.25)}
+  /* 右栏 */
+  .right{width:270px;flex-shrink:0;border-left:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;gap:14px;padding:14px}
+  .sec .h{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.03em}
+  .member{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px}
+  .member .role{font-size:11px;color:var(--muted)}
+  .status{font-size:13px}
+  .status .row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--line)}
+  .status .row:last-child{border-bottom:none}
+  .metric{background:#f5f6fb;border-radius:10px;padding:10px 12px;font-size:13px}
+  .metric .v{font-weight:700;color:var(--primary);font-size:16px}
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="logo">造</div><b>Agent造物坊</b></div>
+    <div style="font-size:12px;color:var(--muted)">AI 产品工厂</div>
+  </header>
+  <div class="cols">
+    <!-- 左栏：搜索 + 任务列表 + 账号 -->
+    <aside class="left">
+      <div class="search">🔍 搜索任务</div>
+      <div class="list">
+        <div class="item on"><span class="dot"></span><span class="name">宠物起名工具</span><span class="badge">进行中</span></div>
+        <div class="item"><span class="name">记账小工具</span><span class="badge">3</span></div>
+        <div class="item"><span class="name">健身计划 App</span></div>
+        <div class="item"><span class="name">课程表小程序</span><span class="badge">2</span></div>
+        <div class="item"><span class="name">老人视频通话</span></div>
+        <div class="item"><span class="name">一周菜单助手</span></div>
+      </div>
+      <div class="acct"><div class="avatar">你</div>产品经理 · 周承健</div>
+    </aside>
+    <!-- 中栏：对话区 + 输入框 -->
+    <main class="mid">
+      <div class="chathead">宠物起名工具</div>
+      <div class="chat">
+        <div class="msg user"><div class="who">你</div><div class="bubble">我要做一个给宠物起名字的小工具</div></div>
+        <div class="msg ai"><div class="who">造物坊 AI</div><div class="bubble">好的！动手前，先确认 1 个关键问题：</div>
+          <div class="quick"><button class="fill">个人用户</button><button>企业</button><button>对外公开</button><button>按推荐</button></div>
+        </div>
+        <div class="msg user"><div class="who">你</div><div class="bubble">按推荐</div></div>
+        <div class="msg ai"><div class="who">造物坊 AI</div><div class="bubble">明白。其余细节我已按推荐默认：免费、手机号登录、国内部署。<br>正在生成 PRD…</div></div>
+        <div class="msg ai"><div class="who">造物坊 AI</div><div class="bubble">PRD 好了 ↓</div>
+          <div class="card"><div class="t">📋 PRD 草稿</div>目标用户：养宠人群 · 核心任务：输入宠物信息生成名字 · 首版：手动输入 + 名字生成 + 收藏</div>
+        </div>
+        <div class="msg ai"><div class="who">造物坊 AI</div><div class="bubble">正在生成代码…</div></div>
+        <div class="msg ai"><div class="who">造物坊 AI</div><div class="bubble">代码生成完成 ↓</div>
+          <div class="code">from fastapi import FastAPI<br>app = FastAPI()<br><br>@app.post("/generate")<br>def generate(req): ...</div>
+        </div>
+        <div class="msg ai"><div class="who">造物坊 AI</div><div class="bubble">🎉 产品完成！可运行了。部署脚本和验收清单已就绪。</div></div>
+      </div>
+      <div class="inputbar"><input placeholder="给造物坊 AI 发消息…"><button>发送</button></div>
+    </main>
+    <!-- 右栏：参与者 + 任务详情 + 度量 -->
+    <aside class="right">
+      <div class="sec"><div class="h">参与者</div>
+        <div class="member"><div class="avatar" style="background:#4f46e5">你</div><div>产品经理<span class="role"> · 你</span></div></div>
+        <div class="member"><div class="avatar">造</div><div>造物坊 AI<span class="role"> · 助手</span></div></div>
+      </div>
+      <div class="sec"><div class="h">任务详情</div>
+        <div class="status">
+          <div class="row"><span>状态</span><span style="color:var(--primary)">已完成</span></div>
+          <div class="row"><span>进度</span><span>9/9 阶段</span></div>
+          <div class="row"><span>耗时</span><span>11 秒</span></div>
+          <div class="row"><span>产物</span><span>代码 · PRD · 部署</span></div>
+        </div>
+      </div>
+      <div class="sec"><div class="h">工厂度量</div>
+        <div class="metric"><div>稳定出货率 <span class="v">62.5%</span></div></div>
+        <div class="metric" style="margin-top:6px"><div>平均成本 <span class="v">¥0.004</span></div></div>
+        <div class="metric" style="margin-top:6px"><div>平均耗时 <span class="v">8.2s</span></div></div>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>

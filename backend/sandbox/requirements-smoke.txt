@@ -1,0 +1,7 @@
+# 生成代码沙箱冒烟镜像预装依赖（容器 --network none，无法再 pip）
+fastapi==0.115.6
+pydantic==2.10.4
+uvicorn==0.34.0
+pillow>=10.0
+python-multipart>=0.0.9
+openai>=1.40

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 验证部署工序 · 一键启动脚本（本地单进程形态）
+set -e
+cd "$(dirname "$0")/.."
+python3 app.py

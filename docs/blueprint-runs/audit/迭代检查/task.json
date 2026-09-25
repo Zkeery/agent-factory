@@ -1,0 +1,9 @@
+{
+  "project": "Agent造物坊",
+  "mode": "audit",
+  "mock": false,
+  "inputs": {
+    "target": ".",
+    "prd": null
+  }
+}

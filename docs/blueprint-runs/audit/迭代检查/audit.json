@@ -1,0 +1,757 @@
+{
+  "root": "/Users/zoe/Documents/happy/项目开发必备文档/projects/Agent造物坊",
+  "title": "Agent造物坊",
+  "intent": {
+    "title": "Agent造物坊",
+    "one_liner": "给需要造 Agent 产品的开发者用，把一句话想法经决策问答与闸门校验逐步推导为 PRD 蓝图并跑出正式蓝图运行结果。",
+    "product_summary": "这是一个「Agent 产品/蓝图的工厂」项目，当前处于阶段 2 后端 MVP 的第 1、2 子阶段（工厂内核 + 接真实模型），已实现并验证。用户在后端验收界面输入想法，回答系统给出的决策卡，确认 PRD，并通过闸门校验。后端用 FastAPI 提供接口，服务层包含 engine、llm、mock_llm、gates、parsing、stages、evidence、prompts 等模块，默认 mock 模式可零真实 Key 运行，也可通过 openai SDK 接真实模型。项目正式产物写入 docs/blueprint-runs/<plan或audit>/<任务>/，文档体系（PRD、技术文档、验收证据、项目状态）较为完整，但可度量性尚未建立，可部署性只是部分具备。",
+    "facts": {
+      "goal": {
+        "value": "把用户的原始想法经「决策卡问答 → PRD 确认 → 闸门校验」的流程推导成正式蓝图并产出运行结果；README 未给出可量化的成功标准",
+        "status": "待确认",
+        "source": "README「验收界面：http://127.0.0.1:8010/ （输入想法 → 回答决策卡 → 确认 PRD → 闸门通过）」；README「正式蓝图运行结果 docs/blueprint-runs/<plan或audit>/<任务>/」"
+      },
+      "users": {
+        "value": "使用者为要开发 Agent 产品的开发/设计者（需求方），以同步交互方式在验收界面按流程回答决策卡；人机比与并发使用形态未在材料中说明",
+        "status": "待确认",
+        "source": "README「用编码工具单独打开本目录，读取 AGENTS.md 即可继续开发」；README「输入想法 → 回答决策卡 → 确认 PRD → 闸门通过」"
+      },
+      "core_loop": {
+        "value": "一次完整闭环：输入想法 → 系统给出决策卡 → 用户逐项回答 → 确认 PRD → 过闸门（gates）→ 产出正式蓝图运行结果，落在 docs/blueprint-runs/<plan或audit>/<任务>/",
+        "status": "明确",
+        "source": "README「输入想法 → 回答决策卡 → 确认 PRD → 闸门通过」；README「正式蓝图运行结果 docs/blueprint-runs/<plan或audit>/<任务>/」；目录 backend/app/services/gates.py"
+      },
+      "deliverable": {
+        "value": "文档型交付物为主：PRD、正式蓝图运行结果（plan / audit 两类）；同时伴随决策卡的问答记录与闸门校验结论",
+        "status": "明确",
+        "source": "README「正式蓝图运行结果 docs/blueprint-runs/<plan或audit>/<任务>/」；目录 docs/PRD/PRD.md、docs/PRD/PRD补全清单.md"
+      },
+      "boundaries": {
+        "value": "不做/未明确允许的事（据现有材料）：本项目的运行产物不写入仓库公共区；共享手册与蓝图留在仓库公共区；不套用其他项目的模型、端口或数据库配置；业务启动和测试命令由 AI 在实际实现后补充，不得照抄其他项目",
+        "status": "明确",
+        "source": "README「共享手册和蓝图留在仓库公共区，本项目的运行产物不写入公共区」；README「不要套用其他项目的模型、端口或数据库配置」；README「业务启动和测试命令由 AI 在实际实现后补充」"
+      },
+      "constraints": {
+        "value": "已知约束：后端预留端口 8010、前端预留端口 3010（为约定值，不代表已实现或被系统保留）；Python 3.12 + venv + uvicorn；默认 mock 可零真实 Key 运行；已接入 openai SDK 用于真实模型；数据库、上传、运行日志放在 data/、logs/ 目录。时延、并发、合规、成本上限未给出",
+        "status": "待确认",
+        "source": "README「后端预留端口 8010，前端预留端口 3010。它们是约定值」；README「python3.12 -m venv .venv」「默认 mock，零真实 Key」；扫描线索 llm_sdks openai backend/app/services/llm.py:54"
+      }
+    },
+    "features": {
+      "destructive_ops": {
+        "value": "no",
+        "evidence": "现有材料只见「生成文档/蓝图产物写入 docs/blueprint-runs」，未见删除、写外部系统、支付、发消息等敏感操作。"
+      },
+      "audit_needed": {
+        "value": "yes",
+        "evidence": "项目设有 docs/PRD/版本/V1.0/验收证据/ 目录，并存在 blueprint-runs/audit 类型产物，说明需要证据与审核记录。"
+      },
+      "multi_step": {
+        "value": "yes",
+        "evidence": "核心闭环为「输入想法 → 回答决策卡 → 确认 PRD → 闸门通过」多步骤流程，且有 services/stages.py 与 gates.py。"
+      },
+      "context_heavy": {
+        "value": "later",
+        "evidence": "当前为单条想法 → 决策卡 → PRD 的线性流程，未见并行探索型子任务；扫描 s06 强度为 none，随蓝图规模增长可能成为问题。"
+      },
+      "large_knowledge": {
+        "value": "later",
+        "evidence": "docs/ 下已有较多领域文档（PRD、技术文档），但扫描未发现按需加载知识库的机制（s07 none）。"
+      },
+      "long_sessions": {
+        "value": "unknown",
+        "evidence": "材料未说明单次会话长度或日志规模，需看实际对话与闸门校验的轮次。"
+      },
+      "cross_session_memory": {
+        "value": "later",
+        "evidence": "目录含 backend/app/models/（当前为空 __init__.py）与 data/ 目录规划，可能用于持久化，但未实现跨会话记忆。"
+      },
+      "persistent_goals": {
+        "value": "later",
+        "evidence": "存在 blueprint-runs/ 运行结果目录与 project.json 项目身份，暗示可续跑，但未见断点续跑的引擎实现。"
+      },
+      "slow_operations": {
+        "value": "yes",
+        "evidence": "调真实大模型生成 PRD/蓝图属长耗时操作，engine.py 中已有相关处理点（s11 weak）。"
+      },
+      "scheduled": {
+        "value": "later",
+        "evidence": "backend/scripts/monitor.py 存在定时/周期监控迹象（s12 weak），但非业务主流程的定时触发。"
+      },
+      "parallel_isolated": {
+        "value": "later",
+        "evidence": "blueprint-runs/<任务>/ 以任务隔离目录，具备隔离基础，但未见多 Agent 并行团队机制（s13 none）。"
+      },
+      "external_ecosystem": {
+        "value": "no",
+        "evidence": "扫描 s14 强度为 none，仅接入 openai SDK，未发现 MCP 或第三方插件接入。"
+      },
+      "fixed_orchestration": {
+        "value": "yes",
+        "evidence": "流程固定为 想法 → 决策卡 → PRD → 闸门，且由 services/stages.py 与 gates.py 固化阶段。"
+      },
+      "auto_completion": {
+        "value": "yes",
+        "evidence": "存在 gates.py 与 parsing.py，用于判定闸门通过与否（s17 strong，mock_llm.py:46、parsing.py:23）。"
+      }
+    },
+    "unknowns": [
+      "这个产品的可量化成功标准是什么（例如多少次蓝图运行算达标、闸门通过率、用户满意度指标）？",
+      "使用者是单个开发者自用，还是要支持多人协作/多租户？是否要求并发与同步响应？",
+      "「决策卡」的生成规则和数量是怎么定的？由模型决定还是模板固定？",
+      "闸门（gates）具体校验哪些内容、失败后能否回退重跑？判定标准由谁定义？",
+      "PRD 确认环节是否需要人工确认、审批人是谁、确认记录保存在哪里？",
+      "调用真实模型的具体供应商、模型名、成本上限与超时预算是多少？是否允许回落到 mock？",
+      "是否涉及合规或敏感数据处理（用户想法内容、PRD 是否含敏感信息）？需要哪些审计与埋点？",
+      "是否需要跨会话记住用户偏好、历史决策？当前 models/ 为空，持久化方案是什么？",
+      "多步骤长会话场景下，是否需要断点续跑与进度跟踪？当前如何恢复中断的蓝图生成？",
+      "blueprint-runs 的 plan 与 audit 两类产物分别对应什么触发条件与产出格式？",
+      "为什么可度量（measurable）验收不通过、可部署（deployable）仅为部分具备？差距在哪里、计划何时补齐？",
+      "前端是否真的有需求（当前 static/index.html 只是简易验收页），还是长期只保留后端 + 接口？"
+    ]
+  },
+  "prd_extract": null,
+  "components": [
+    {
+      "id": "s01",
+      "name": "Agent Loop",
+      "decision": "必选",
+      "reason": "一切基础：循环 + 工具（一切基础，恒选）",
+      "feature": ""
+    },
+    {
+      "id": "s02",
+      "name": "工具系统",
+      "decision": "必选",
+      "reason": "需要调用外部系统/API/数据源（一切基础，恒选）",
+      "feature": ""
+    },
+    {
+      "id": "s03",
+      "name": "权限系统",
+      "decision": "放弃",
+      "reason": "现有材料只见「生成文档/蓝图产物写入 docs/blueprint-runs」，未见删除、写外部系统、支付、发消息等敏感操作。",
+      "feature": "destructive_ops"
+    },
+    {
+      "id": "s04",
+      "name": "钩子系统",
+      "decision": "必选",
+      "reason": "项目设有 docs/PRD/版本/V1.0/验收证据/ 目录，并存在 blueprint-runs/audit 类型产物，说明需要证据与审核记录。",
+      "feature": "audit_needed"
+    },
+    {
+      "id": "s05",
+      "name": "任务规划",
+      "decision": "必选",
+      "reason": "核心闭环为「输入想法 → 回答决策卡 → 确认 PRD → 闸门通过」多步骤流程，且有 services/stages.py 与 gates.py。",
+      "feature": "multi_step"
+    },
+    {
+      "id": "s06",
+      "name": "子 Agent",
+      "decision": "二期",
+      "reason": "当前为单条想法 → 决策卡 → PRD 的线性流程，未见并行探索型子任务；扫描 s06 强度为 none，随蓝图规模增长可能成为问题。",
+      "feature": "context_heavy"
+    },
+    {
+      "id": "s07",
+      "name": "技能加载",
+      "decision": "二期",
+      "reason": "docs/ 下已有较多领域文档（PRD、技术文档），但扫描未发现按需加载知识库的机制（s07 none）。",
+      "feature": "large_knowledge"
+    },
+    {
+      "id": "s08",
+      "name": "上下文压缩",
+      "decision": "待确认",
+      "reason": "输入未说明：会话是否很长、工具输出或日志量是否很大？",
+      "feature": "long_sessions"
+    },
+    {
+      "id": "s09",
+      "name": "记忆系统",
+      "decision": "二期",
+      "reason": "目录含 backend/app/models/（当前为空 __init__.py）与 data/ 目录规划，可能用于持久化，但未实现跨会话记忆。",
+      "feature": "cross_session_memory"
+    },
+    {
+      "id": "s10",
+      "name": "任务系统",
+      "decision": "二期",
+      "reason": "存在 blueprint-runs/ 运行结果目录与 project.json 项目身份，暗示可续跑，但未见断点续跑的引擎实现。",
+      "feature": "persistent_goals"
+    },
+    {
+      "id": "s11",
+      "name": "后台任务",
+      "decision": "必选",
+      "reason": "调真实大模型生成 PRD/蓝图属长耗时操作，engine.py 中已有相关处理点（s11 weak）。",
+      "feature": "slow_operations"
+    },
+    {
+      "id": "s12",
+      "name": "定时调度",
+      "decision": "二期",
+      "reason": "backend/scripts/monitor.py 存在定时/周期监控迹象（s12 weak），但非业务主流程的定时触发。",
+      "feature": "scheduled"
+    },
+    {
+      "id": "s13",
+      "name": "Agent 团队",
+      "decision": "二期",
+      "reason": "blueprint-runs/<任务>/ 以任务隔离目录，具备隔离基础，但未见多 Agent 并行团队机制（s13 none）。",
+      "feature": "parallel_isolated"
+    },
+    {
+      "id": "s14",
+      "name": "MCP 插件",
+      "decision": "放弃",
+      "reason": "扫描 s14 强度为 none，仅接入 openai SDK，未发现 MCP 或第三方插件接入。",
+      "feature": "external_ecosystem"
+    },
+    {
+      "id": "s15",
+      "name": "集成 Harness",
+      "decision": "必选",
+      "reason": "第一版已选 5 个可选组件（s04, s05, s11, s16, s17），需归一到单一循环",
+      "feature": ""
+    },
+    {
+      "id": "s16",
+      "name": "工作流运行时",
+      "decision": "必选",
+      "reason": "流程固定为 想法 → 决策卡 → PRD → 闸门，且由 services/stages.py 与 gates.py 固化阶段。",
+      "feature": "fixed_orchestration"
+    },
+    {
+      "id": "s17",
+      "name": "目标闭环",
+      "decision": "必选",
+      "reason": "存在 gates.py 与 parsing.py，用于判定闸门通过与否（s17 strong，mock_llm.py:46、parsing.py:23）。",
+      "feature": "auto_completion"
+    }
+  ],
+  "gaps": [
+    {
+      "id": "s04",
+      "name": "钩子系统",
+      "expected": "必选",
+      "present": "none",
+      "verdict": "缺失",
+      "priority": "P0",
+      "reason": "项目设有 docs/PRD/版本/V1.0/验收证据/ 目录，并存在 blueprint-runs/audit 类型产物，说明需要证据与审核记录。",
+      "evidence": [],
+      "readme": "s04_hooks/README.md"
+    },
+    {
+      "id": "s15",
+      "name": "集成 Harness",
+      "expected": "必选",
+      "present": "none",
+      "verdict": "缺失",
+      "priority": "P0",
+      "reason": "第一版已选 5 个可选组件（s04, s05, s11, s16, s17），需归一到单一循环",
+      "evidence": [],
+      "readme": "s15_integrated_harness/README.md"
+    },
+    {
+      "id": "s02",
+      "name": "工具系统",
+      "expected": "必选",
+      "present": "weak",
+      "verdict": "薄弱",
+      "priority": "P1",
+      "reason": "需要调用外部系统/API/数据源（一切基础，恒选）",
+      "evidence": [
+        "backend/app/services/mock_llm.py:63 `\"def run_pipeline(user_input: str) -> str:\\n\"`"
+      ],
+      "readme": "s02_tool_use/README.md"
+    },
+    {
+      "id": "s05",
+      "name": "任务规划",
+      "expected": "必选",
+      "present": "weak",
+      "verdict": "薄弱",
+      "priority": "P1",
+      "reason": "核心闭环为「输入想法 → 回答决策卡 → 确认 PRD → 闸门通过」多步骤流程，且有 services/stages.py 与 gates.py。",
+      "evidence": [
+        "backend/app/services/mock_llm.py:64 `\"    # TODO: 接入真实模型与业务逻辑\\n\"`"
+      ],
+      "readme": "s05_todo_write/README.md"
+    },
+    {
+      "id": "s11",
+      "name": "后台任务",
+      "expected": "必选",
+      "present": "weak",
+      "verdict": "薄弱",
+      "priority": "P1",
+      "reason": "调真实大模型生成 PRD/蓝图属长耗时操作，engine.py 中已有相关处理点（s11 weak）。",
+      "evidence": [
+        "backend/app/services/engine.py:136 `threading.Thread(target=advance_run, args=(run_id,), daemon=True).start()`"
+      ],
+      "readme": "s11_background_tasks/README.md"
+    },
+    {
+      "id": "s16",
+      "name": "工作流运行时",
+      "expected": "必选",
+      "present": "weak",
+      "verdict": "薄弱",
+      "priority": "P1",
+      "reason": "流程固定为 想法 → 决策卡 → PRD → 闸门，且由 services/stages.py 与 gates.py 固化阶段。",
+      "evidence": [
+        "backend/app/services/mock_llm.py:63 `\"def run_pipeline(user_input: str) -> str:\\n\"`"
+      ],
+      "readme": "s16_workflow_runtime/README.md"
+    },
+    {
+      "id": "s06",
+      "name": "子 Agent",
+      "expected": "二期",
+      "present": "none",
+      "verdict": "二期补齐",
+      "priority": "P2",
+      "reason": "当前为单条想法 → 决策卡 → PRD 的线性流程，未见并行探索型子任务；扫描 s06 强度为 none，随蓝图规模增长可能成为问题。",
+      "evidence": [],
+      "readme": "s06_subagent/README.md"
+    },
+    {
+      "id": "s07",
+      "name": "技能加载",
+      "expected": "二期",
+      "present": "none",
+      "verdict": "二期补齐",
+      "priority": "P2",
+      "reason": "docs/ 下已有较多领域文档（PRD、技术文档），但扫描未发现按需加载知识库的机制（s07 none）。",
+      "evidence": [],
+      "readme": "s07_skill_loading/README.md"
+    },
+    {
+      "id": "s09",
+      "name": "记忆系统",
+      "expected": "二期",
+      "present": "none",
+      "verdict": "二期补齐",
+      "priority": "P2",
+      "reason": "目录含 backend/app/models/（当前为空 __init__.py）与 data/ 目录规划，可能用于持久化，但未实现跨会话记忆。",
+      "evidence": [],
+      "readme": "s09_memory/README.md"
+    },
+    {
+      "id": "s10",
+      "name": "任务系统",
+      "expected": "二期",
+      "present": "none",
+      "verdict": "二期补齐",
+      "priority": "P2",
+      "reason": "存在 blueprint-runs/ 运行结果目录与 project.json 项目身份，暗示可续跑，但未见断点续跑的引擎实现。",
+      "evidence": [],
+      "readme": "s10_task_system/README.md"
+    },
+    {
+      "id": "s12",
+      "name": "定时调度",
+      "expected": "二期",
+      "present": "weak",
+      "verdict": "二期加固",
+      "priority": "P2",
+      "reason": "backend/scripts/monitor.py 存在定时/周期监控迹象（s12 weak），但非业务主流程的定时触发。",
+      "evidence": [
+        "backend/scripts/monitor.py:21 `INTERVAL = 30                                       # 秒`",
+        "backend/scripts/monitor.py:161 `f.write(f\"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 看门狗启动，每 {INTERVAL}s 检查一次（含蓝图 plan/audit）\\n\")`",
+        "backend/scripts/monitor.py:167 `time.sleep(INTERVAL)`"
+      ],
+      "readme": "s12_cron_scheduler/README.md"
+    },
+    {
+      "id": "s13",
+      "name": "Agent 团队",
+      "expected": "二期",
+      "present": "none",
+      "verdict": "二期补齐",
+      "priority": "P2",
+      "reason": "blueprint-runs/<任务>/ 以任务隔离目录，具备隔离基础，但未见多 Agent 并行团队机制（s13 none）。",
+      "evidence": [],
+      "readme": "s13_agent_teams/README.md"
+    },
+    {
+      "id": "s08",
+      "name": "上下文压缩",
+      "expected": "待确认",
+      "present": "none",
+      "verdict": "待确认",
+      "priority": "?",
+      "reason": "输入未说明：会话是否很长、工具输出或日志量是否很大？",
+      "evidence": [],
+      "readme": "s08_context_compact/README.md"
+    },
+    {
+      "id": "s03",
+      "name": "权限系统",
+      "expected": "放弃",
+      "present": "strong",
+      "verdict": "可能多余",
+      "priority": "info",
+      "reason": "现有材料只见「生成文档/蓝图产物写入 docs/blueprint-runs」，未见删除、写外部系统、支付、发消息等敏感操作。",
+      "evidence": [
+        "backend/app/services/engine.py:34 `if not d.is_relative_to(DATA_ROOT.resolve()):`",
+        "backend/app/services/evidence.py:18 `if not d.is_relative_to(DATA_ROOT.resolve()):`"
+      ],
+      "readme": "s03_permission/README.md"
+    },
+    {
+      "id": "s01",
+      "name": "Agent Loop",
+      "expected": "必选",
+      "present": "strong",
+      "verdict": "已具备",
+      "priority": "-",
+      "reason": "一切基础：循环 + 工具（一切基础，恒选）",
+      "evidence": [
+        "backend/app/api/runs.py:163 `while True:`",
+        "backend/app/services/engine.py:88 `while True:`",
+        "backend/app/services/llm.py:63 `resp = self.client.chat.completions.create(`",
+        "backend/scripts/monitor.py:162 `while True:`"
+      ],
+      "readme": "s01_agent_loop/README.md"
+    },
+    {
+      "id": "s14",
+      "name": "MCP 插件",
+      "expected": "放弃",
+      "present": "none",
+      "verdict": "不需要",
+      "priority": "-",
+      "reason": "扫描 s14 强度为 none，仅接入 openai SDK，未发现 MCP 或第三方插件接入。",
+      "evidence": [],
+      "readme": "s14_mcp_plugin/README.md"
+    },
+    {
+      "id": "s17",
+      "name": "目标闭环",
+      "expected": "必选",
+      "present": "strong",
+      "verdict": "已具备",
+      "priority": "-",
+      "reason": "存在 gates.py 与 parsing.py，用于判定闸门通过与否（s17 strong，mock_llm.py:46、parsing.py:23）。",
+      "evidence": [
+        "backend/app/services/mock_llm.py:46 `\"goal_users\": f\"围绕「{idea}」的目标用户（决策 Q1：{answers.get('Q1', '')}）\",`",
+        "backend/app/services/parsing.py:23 `goal_users: str = \"\"`"
+      ],
+      "readme": "s17_goal_loop/README.md"
+    }
+  ],
+  "acceptance": {
+    "runnable": {
+      "name": "可运行",
+      "status": "pass",
+      "evidence": [
+        "backend/scripts/monitor.py",
+        ".env.example",
+        "backend/.env.example"
+      ]
+    },
+    "fault_tolerant": {
+      "name": "可容错",
+      "status": "pass",
+      "evidence": [
+        "backend/app/services/engine.py:125",
+        "backend/app/services/llm.py:57",
+        "backend/scripts/monitor.py:34"
+      ]
+    },
+    "observable": {
+      "name": "可观测",
+      "status": "pass",
+      "evidence": [
+        "backend/app/main.py:4",
+        "backend/app/services/engine.py:5",
+        "backend/app/services/llm.py:4"
+      ]
+    },
+    "testable": {
+      "name": "可测试",
+      "status": "pass",
+      "evidence": [
+        "backend/tests/test_api.py",
+        "backend/tests/test_engine.py",
+        "backend/tests/test_failure.py",
+        "backend/tests/test_llm.py"
+      ]
+    },
+    "deployable": {
+      "name": "可部署",
+      "status": "partial",
+      "evidence": []
+    },
+    "measurable": {
+      "name": "可度量",
+      "status": "fail",
+      "evidence": []
+    }
+  },
+  "elements_missing": [
+    "知识：没有扫描到知识库、技能或检索的痕迹，领域知识从哪来不明"
+  ],
+  "completion": 0.5,
+  "review": {
+    "ok": false,
+    "issues": [
+      {
+        "component": "s04",
+        "problem": "理由称「项目设有 docs/PRD/版本/V1.0/验收证据/ 目录，并存在 blueprint-runs/audit 类型产物」，该事实未出现在给定输入（反推意图）中，也无扫描证据；同时「验收证据目录/audit 产物」只能说明有审核与记录需求，不能直接推出「钩子系统（s04_hooks，事件钩子）」必选属 P0，属理由超出输入、判断跳跃。",
+        "severity": "medium"
+      },
+      {
+        "component": "s15",
+        "problem": "理由「第一版已选 5 个可选组件（s04, s05, s11, s16, s17），需归一到单一循环」中，s17 在差距表中并未列为第一版可选组件（s17 已被判定为 strong/已具备），且「已选 5 个」这一前提无输入出处；另 s15 属元组件，其 P0 判断应说明与产品意图（一句话想法推导 PRD 蓝图单一闭环）的关系，当前理由来自程序内部选择而非产品意图。",
+        "severity": "medium"
+      },
+      {
+        "component": "s02",
+        "problem": "证据行 backend/app/services/mock_llm.py:63 内容是 run_pipeline 定义，与「调用外部系统/API/数据源」的工具系统能力无直接对应；理由「一切基础，恒选」是通用假设，未与产品意图（推导 PRD 蓝图流程）建立关系。s01 证据含 llm.py:63、s17 含 mock_llm.py:46/parsing.py:23，更接近真实/结构化模型调用，应据此复核 s02 是否应为 weak 或需换证据。",
+        "severity": "high"
+      },
+      {
+        "component": "s05",
+        "problem": "证据行 backend/app/services/mock_llm.py:64 是「# TODO: 接入真实模型与业务逻辑」注释，未体现任务规划（todo/待办规划）能力；理由提到的 services/stages.py 与 gates.py 未出现在证据表、也未见于反推意图的 facts 出处（仅 gates 以目录形式出现且被 s01/s03/s16 引用），证据与结论不匹配。",
+        "severity": "medium"
+      },
+      {
+        "component": "s16",
+        "problem": "证据 backend/app/services/mock_llm.py:63（run_pipeline 定义）与工作流运行时的对应关系薄弱；理由称 services/stages.py 固化阶段，但该文件在证据表与反推意图出处中均未出现，属未证实的引述。",
+        "severity": "medium"
+      },
+      {
+        "component": "s06",
+        "problem": "「二期补齐」的结论缺少对产品意图的引用（意图未提出并行探索型子任务需求），仅以「扫描 none、随规模增长可能成为问题」推测，判定依据不足；至少应注明为待确认而非既定二期项。",
+        "severity": "low"
+      },
+      {
+        "component": "s07",
+        "problem": "「docs/ 下已有较多领域文档（PRD、技术文档）」中「技术文档」未在输入中出现，反推意图仅载明 docs/PRD/PRD.md、docs/PRD/PRD补全清单.md；事实扩张，需按输入订正。",
+        "severity": "medium"
+      },
+      {
+        "component": "s09",
+        "problem": "理由「目录含 backend/app/models/（当前为空 __init__.py）与 data/ 目录规划」中，models 目录与空 __init__ 的具体状态未出现在给定输入（data/ 仅作为数据库/上传/运行日志目录在约束中提及），属证据外推；据此判定二期补齐的依据不足。",
+        "severity": "medium"
+      },
+      {
+        "component": "s10",
+        "problem": "理由「存在 blueprint-runs/ 运行结果目录与 project.json 项目身份」中，project.json 在输入中无出处（意图仅提到 docs/blueprint-runs/<plan或audit>/<任务>/）；「可续跑」为推测，未与意图绑定，判定依据不足。",
+        "severity": "medium"
+      },
+      {
+        "component": "s13",
+        "problem": "「blueprint-runs/<任务>/ 以任务隔离目录，具备隔离基础」与多 Agent 团队机制无关，隔离目录不能作为团队能力的推断依据；结论与证据之间无因果。",
+        "severity": "low"
+      },
+      {
+        "component": "s11",
+        "problem": "结论本身有 engine.py:136 线程证据支撑，但理由称「调真实大模型生成 PRD/蓝图属长耗时操作」在意图中未明示（默认 mock 可零 Key 运行、真实模型接入为扫描线索），属对耗时特性的假设，宜标注待确认。",
+        "severity": "low"
+      },
+      {
+        "component": "s12",
+        "problem": "证据（monitor.py 的 INTERVAL/sleep/看门狗）与「定时调度」的对应成立，且已自述「非业务主流程」，判定尚可；但 P2「二期加固」未说明产品意图中是否存在周期性任务需求，宜补充为待确认。",
+        "severity": "low"
+      }
+    ],
+    "summary": "差距表存在多处证据与结论不匹配：s04、s15 的理由引用了输入中不存在的事实（验收证据目录、s17 属第一版可选组件），s05、s16 引用的 stages.py/gates.py 阶段固化未列证据，s09、s10 的 models 空目录与 project.json 也超出输入。s02 以 run_pipeline 定义支撑「工具系统」尤为牵强，另有 s07「技术文档」、s13「隔离目录推断团队机制」等外推。建议：删除输入中无出处的事实，重新锚定证据行，并将无产品意图依据的 P0 判断降级或标注待确认。"
+  },
+  "inventory": {
+    "file_count": 52,
+    "ext_counts": {
+      ".example": 2,
+      ".md": 18,
+      ".json": 1,
+      ".txt": 1,
+      ".py": 23,
+      ".html": 1,
+      ".png": 6
+    },
+    "dependencies": [],
+    "llm_sdks": {
+      "openai": [
+        "backend/app/services/llm.py:54"
+      ]
+    },
+    "config_files": [
+      ".env.example",
+      "backend/.env.example"
+    ],
+    "entry_points": [
+      "backend/scripts/monitor.py"
+    ],
+    "components": {
+      "s01": {
+        "strength": "strong",
+        "code_files": 4,
+        "sample": [
+          "backend/app/api/runs.py:163",
+          "backend/app/services/engine.py:88",
+          "backend/app/services/llm.py:63"
+        ]
+      },
+      "s02": {
+        "strength": "weak",
+        "code_files": 1,
+        "sample": [
+          "backend/app/services/mock_llm.py:63"
+        ]
+      },
+      "s03": {
+        "strength": "strong",
+        "code_files": 2,
+        "sample": [
+          "backend/app/services/engine.py:34",
+          "backend/app/services/evidence.py:18"
+        ]
+      },
+      "s04": {
+        "strength": "none",
+        "code_files": 0,
+        "sample": []
+      },
+      "s05": {
+        "strength": "weak",
+        "code_files": 1,
+        "sample": [
+          "backend/app/services/mock_llm.py:64"
+        ]
+      },
+      "s06": {
+        "strength": "none",
+        "code_files": 0,
+        "sample": []
+      },
+      "s07": {
+        "strength": "none",
+        "code_files": 0,
+        "sample": []
+      },
+      "s08": {
+        "strength": "none",
+        "code_files": 0,
+        "sample": []
+      },
+      "s09": {
+        "strength": "none",
+        "code_files": 0,
+        "sample": []
+      },
+      "s10": {
+        "strength": "none",
+        "code_files": 0,
+        "sample": []
+      },
+      "s11": {
+        "strength": "weak",
+        "code_files": 1,
+        "sample": [
+          "backend/app/services/engine.py:136"
+        ]
+      },
+      "s12": {
+        "strength": "weak",
+        "code_files": 1,
+        "sample": [
+          "backend/scripts/monitor.py:21",
+          "backend/scripts/monitor.py:161",
+          "backend/scripts/monitor.py:167"
+        ]
+      },
+      "s13": {
+        "strength": "none",
+        "code_files": 0,
+        "sample": []
+      },
+      "s14": {
+        "strength": "none",
+        "code_files": 0,
+        "sample": []
+      },
+      "s15": {
+        "strength": "none",
+        "code_files": 0,
+        "sample": []
+      },
+      "s16": {
+        "strength": "weak",
+        "code_files": 1,
+        "sample": [
+          "backend/app/services/mock_llm.py:63"
+        ]
+      },
+      "s17": {
+        "strength": "strong",
+        "code_files": 2,
+        "sample": [
+          "backend/app/services/mock_llm.py:46",
+          "backend/app/services/parsing.py:23"
+        ]
+      }
+    },
+    "acceptance": {
+      "runnable": {
+        "name": "可运行",
+        "status": "pass",
+        "evidence": [
+          "backend/scripts/monitor.py",
+          ".env.example",
+          "backend/.env.example"
+        ]
+      },
+      "fault_tolerant": {
+        "name": "可容错",
+        "status": "pass",
+        "evidence": [
+          "backend/app/services/engine.py:125",
+          "backend/app/services/llm.py:57",
+          "backend/scripts/monitor.py:34"
+        ]
+      },
+      "observable": {
+        "name": "可观测",
+        "status": "pass",
+        "evidence": [
+          "backend/app/main.py:4",
+          "backend/app/services/engine.py:5",
+          "backend/app/services/llm.py:4"
+        ]
+      },
+      "testable": {
+        "name": "可测试",
+        "status": "pass",
+        "evidence": [
+          "backend/tests/test_api.py",
+          "backend/tests/test_engine.py",
+          "backend/tests/test_failure.py",
+          "backend/tests/test_llm.py"
+        ]
+      },
+      "deployable": {
+        "name": "可部署",
+        "status": "partial",
+        "evidence": []
+      },
+      "measurable": {
+        "name": "可度量",
+        "status": "fail",
+        "evidence": []
+      }
+    }
+  },
+  "runner": "anthropic",
+  "budget": {
+    "calls": 2,
+    "input_tokens": 6194,
+    "output_tokens": 3411,
+    "max_calls": 16,
+    "max_tokens": 400000
+  }
+}

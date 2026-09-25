@@ -1,0 +1,190 @@
+@import "tailwindcss";
+
+:root {
+  /* 近黑 + 黑/白/淡蓝 */
+  --ink: #eef2f7;
+  --ink-soft: #c3ccd8;
+  --muted: #9aa5b5;
+  --muted-2: #66707f;
+
+  --paper: #0a0b0e;
+  --paper-2: #0d0f13;
+  --surface: #11141a;
+  --surface-2: #1a1f28; /* 未选中深灰胶囊 */
+
+  --line: rgba(255, 255, 255, 0.10);
+  --line-strong: rgba(255, 255, 255, 0.18);
+
+  --brand: #7cb8f5;
+  --brand-2: #b9d9ff;
+  --brand-soft: rgba(142, 197, 255, 0.15);
+  --brand-ring: rgba(142, 197, 255, 0.4);
+  --accent: #8ec5ff;
+
+  --ok: #7fd4f5;
+  --ok-soft: rgba(127, 212, 245, 0.12);
+  --warn: #a5d8ff;
+  --warn-soft: rgba(165, 216, 255, 0.12);
+  --danger: #ff8f8f;
+  --danger-soft: rgba(255, 143, 143, 0.12);
+
+  --ink-on-brand: #0a0b0e; /* 渐变胶囊上的深色文字 */
+
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 24px;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 16px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.4), 0 24px 48px rgba(0, 0, 0, 0.45);
+  --shadow-brand: 0 8px 24px rgba(142, 197, 255, 0.25);
+
+  --sidebar-w: 232px;
+  --header-h: 0px;
+
+  /* legacy aliases */
+  --color-primary: var(--brand);
+  --color-primary-dark: #6fb0ff;
+  --color-primary-light: var(--brand-soft);
+  --color-bg: var(--paper);
+  --color-surface: var(--surface);
+  --color-text: var(--ink);
+  --color-muted: var(--muted);
+  --color-ok: var(--ok);
+  --color-danger: var(--danger);
+  --color-line: var(--line);
+  --gradient-brand: linear-gradient(135deg, #f4f9ff 0%, #b9d9ff 40%, #7cb8f5 100%);
+  --shadow-card: var(--shadow-sm);
+  --shadow-float: var(--shadow-brand);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    radial-gradient(900px 480px at 12% -8%, rgba(142, 197, 255, 0.10), transparent 55%);
+  background-size: 22px 22px, auto;
+  font-family:
+    "SF Pro Text",
+    -apple-system,
+    BlinkMacSystemFont,
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    "Noto Sans CJK SC",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+textarea::placeholder,
+input::placeholder {
+  color: var(--muted-2);
+}
+
+::selection {
+  background: rgba(67, 56, 202, 0.16);
+}
+
+/* Focus ring utility */
+:focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Soft scrollbar for panels */
+.scroll-soft::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-soft::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+}
+.scroll-soft::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.25);
+    opacity: 0.7;
+  }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-up {
+  animation: fade-up 0.35s ease-out both;
+}
+
+@theme inline {
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
+}
+
+/* 深色主题软色块映射（替换旧浅色 utility 类） */
+.bg-brand-soft {
+  background: var(--brand-soft);
+}
+.bg-warn-soft {
+  background: var(--warn-soft);
+}
+.bg-ok-soft {
+  background: var(--ok-soft);
+}
+.bg-danger-soft {
+  background: var(--danger-soft);
+}
+.bg-surface-2 {
+  background: var(--surface-2);
+}
+.text-muted {
+  color: var(--muted);
+}
+.text-brand-2 {
+  color: var(--brand-2);
+}

@@ -1,0 +1,47 @@
+[
+  {
+    "code": "Q1",
+    "question": "这个App的核心用户年龄段是哪个阶段孩子的家长？",
+    "options": "A 0-3岁婴幼儿 / B 3-6岁学龄前 / C 6-12岁小学 / D 全年龄段通用",
+    "recommendation": "选A或B，幼儿阶段家长记录意愿最强、付费意愿高",
+    "consequence": "若不锁定年龄段，功能设计将无法聚焦，记录模板和提醒逻辑会过于泛化",
+    "answer": null,
+    "status": "open"
+  },
+  {
+    "code": "Q2",
+    "question": "记录方式以哪种为主？",
+    "options": "A 纯手动文字/图片 / B AI辅助自动生成（如语音转文字、照片智能配文） / C 两者结合",
+    "recommendation": "选C，手动保底+AI提效，兼顾成本与体验",
+    "consequence": "若只做手动，用户记录负担重易流失；若只做AI，隐私和成本风险高",
+    "answer": null,
+    "status": "open"
+  },
+  {
+    "code": "Q3",
+    "question": "成长记录默认是私密还是可分享？",
+    "options": "A 仅家庭成员可见 / B 可生成分享链接给亲友 / C 可发布到公开社区",
+    "recommendation": "选A为主、B为辅，默认私密最安全",
+    "consequence": "若默认公开或分享，涉及儿童隐私泄露风险，可能违反未成年人保护法规",
+    "answer": null,
+    "status": "open"
+  },
+  {
+    "code": "Q4",
+    "question": "是否涉及云端存储儿童照片和视频？",
+    "options": "A 是，云端存储+同步 / B 仅本地存储 / C 本地为主、云端备份可选",
+    "recommendation": "选C，本地优先降低隐私与存储成本，云端作为增值",
+    "consequence": "若强制云端，需承担高存储成本和严格的数据合规责任；若仅本地，换机丢失风险高",
+    "answer": null,
+    "status": "open"
+  },
+  {
+    "code": "Q5",
+    "question": "首版MVP的交付范围是什么？",
+    "options": "A 仅记录+时间轴 / B 记录+时间轴+家庭共享 / C 记录+时间轴+共享+AI生成+打印成册",
+    "recommendation": "选A，先验证核心记录需求再迭代",
+    "consequence": "若首版堆叠过多功能，开发周期拉长，核心体验打磨不足，上线风险高",
+    "answer": null,
+    "status": "open"
+  }
+]
