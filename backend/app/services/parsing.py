@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -29,6 +30,7 @@ class PrdDraft(BaseModel):
     model_cost: str = ""
     data_nonfunc: str = ""
     launch: str = ""
+    output_type: Literal["text", "image", "video", "other"] | None = None
 
 
 def strip_fence(raw: str) -> str:
@@ -76,7 +78,7 @@ def parse_prd(raw: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError("PRD 必须是对象")
     prd = PrdDraft(**data)
-    return prd.model_dump()
+    return prd.model_dump(exclude_none=True)
 
 
 def _strip_note_lines(block: str) -> str:

@@ -117,7 +117,7 @@ def test_gate_fails_when_test_fails(session, monkeypatch):
     session.add(Confirmation(run_id=run.id, kind="prd", status="confirmed"))
     session.commit()
     # 让测试工序失败
-    monkeypatch.setattr(testing, "run_tests", lambda run_id, idea="": (False, "语法错误"))
+    monkeypatch.setattr(testing, "run_tests", lambda run_id, idea="", output_type=None: (False, "语法错误"))
     engine.advance(session, run)
     assert run.current_stage == Stage.GATE_FAILED.value
 

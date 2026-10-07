@@ -104,8 +104,11 @@ def _free_port(start: int = 8000, end: int = 8090) -> int | None:
 
 
 def _child_env() -> dict[str, str]:
+    # 成品需要已约定的模型配置，但不继承后端数据库、登录及其他服务密钥。
     return {
-        **os.environ,
+        **{key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TZ", "TMPDIR", "SSL_CERT_FILE") if key in os.environ},
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
         "DEEPSEEK_API_KEY": settings.llm_api_key or "",
         "DEEPSEEK_BASE_URL": settings.llm_base_url,
         "DEEPSEEK_MODEL": settings.llm_model,
@@ -176,7 +179,7 @@ def _try_json(raw: str) -> dict | None:
 
 
 def http_main_smoke(base_url: str) -> tuple[bool, str, dict | None]:
-    """主路径烟测：POST /generate。不要求真 LLM，只要路由可达且非 5xx。返回 (ok, msg, 响应JSON)。"""
+    """主路径烟测：POST /generate 必须成功响应；业务效果仍由真实任务验收。"""
     url = base_url.rstrip("/") + "/generate"
     body = json.dumps({"input": "ping"}).encode("utf-8")
     req = urllib.request.Request(
@@ -189,7 +192,7 @@ def http_main_smoke(base_url: str) -> tuple[bool, str, dict | None]:
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             parsed = _try_json(raw)
-            if resp.status >= 500:
+            if not 200 <= resp.status < 300:
                 return False, f"主路径返回 {resp.status}: {raw[:200]}", None
             return True, "主路径烟测通过", parsed
     except urllib.error.HTTPError as exc:
@@ -200,8 +203,6 @@ def http_main_smoke(base_url: str) -> tuple[bool, str, dict | None]:
             pass
         if exc.code == 404:
             return False, "主路径 /generate 不存在", None
-        if exc.code < 500:
-            return True, f"主路径可达（HTTP {exc.code}）", None
         return False, f"主路径失败 {exc.code}: {raw[:200]}", None
     except Exception as exc:  # noqa: BLE001
         return False, f"主路径请求失败: {exc}", None

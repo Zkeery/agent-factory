@@ -2,8 +2,63 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class RequirementFeedbackRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    feedback: str = Field(min_length=1, max_length=4000)
+
+
+class RequirementFeedbackOut(BaseModel):
+    id: str
+    feedback: str
+    created_at: datetime
+
+
+class ReviseRunRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    change_request: str = Field(min_length=1, max_length=4000)
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    acceptance_mode: Literal["basic", "scenario"] = "scenario"
+    execution_mode: Literal["workflow", "agent_team"] | None = None
+
+
+class AcceptanceScenario(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    id: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=200)
+    input: str = Field(min_length=1, max_length=2000)
+    expected_output: str = Field(min_length=1, max_length=2000)
+
+
+class AcceptanceScenariosRequest(BaseModel):
+    scenarios: list[AcceptanceScenario] = Field(min_length=3, max_length=10)
+
+    @model_validator(mode="after")
+    def unique_ids(self):
+        if len({item.id for item in self.scenarios}) != len(self.scenarios):
+            raise ValueError("场景 id 不能重复")
+        return self
+
+
+class AcceptanceScenarioResult(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    scenario_id: str = Field(min_length=1, max_length=64)
+    passed: bool = Field(strict=True)
+    observation: str = Field(default="", max_length=4000)
+
+
+class AcceptanceResultsRequest(BaseModel):
+    scenario_results: list[AcceptanceScenarioResult] = Field(default_factory=list, max_length=10)
+
+
+class AcceptChecklistItem(BaseModel):
+    id: str
+    passed: bool
+    label: str = ""
 
 
 class CreateRunRequest(BaseModel):
@@ -12,6 +67,8 @@ class CreateRunRequest(BaseModel):
     workspace_path: str | None = None
     project_name: str | None = None
     llm_provider: str | None = None  # mock | deepseek | 空=跟随全局
+    acceptance_mode: Literal["basic", "scenario"] = "basic"
+    execution_mode: Literal["workflow", "agent_team"] = "workflow"
 
 
 class CreateScheduleRequest(BaseModel):
@@ -61,6 +118,7 @@ class AnswerDecisionRequest(BaseModel):
 
 class ConfirmPrdRequest(BaseModel):
     confirmed: bool = True
+    prd_revision: int | None = Field(default=None, ge=0)
 
 
 class DecisionOut(BaseModel):
@@ -75,6 +133,7 @@ class DecisionOut(BaseModel):
 
 
 class EvidenceOut(BaseModel):
+    id: int = 0
     stage: str
     title: str
     content_path: str
@@ -104,6 +163,8 @@ class RunSummary(BaseModel):
     created_at: datetime
     project_id: str | None = None
     auto_schedule_id: str | None = None
+    parent_run_id: str | None = None
+    execution_mode: Literal["workflow", "agent_team"] = "workflow"
 
 
 class RunListOut(BaseModel):
@@ -136,6 +197,17 @@ class RunOut(BaseModel):
     workspace_always_allow: bool = False
     llm_provider: str = ""
     llm_model: str = ""
+    execution_mode: Literal["workflow", "agent_team"] = "workflow"
+    parent_run_id: str | None = None
+    change_request: str = ""
+    requirement_feedback: list[RequirementFeedbackOut] = Field(default_factory=list)
+    prd_revision: int = 0
+    acceptance_mode: Literal["basic", "scenario"] = "basic"
+    acceptance_scenarios: list[AcceptanceScenario] = Field(default_factory=list)
+    acceptance_results: list[AcceptanceScenarioResult] = Field(default_factory=list)
+    acceptance_checklist: list[AcceptChecklistItem] = Field(default_factory=list)
+    acceptance_note: str = ""
+    accepted_at: datetime | None = None
     decisions: list[DecisionOut] = []
     evidence: list[EvidenceOut] = []
     metric: RunMetricOut | None = None
@@ -179,15 +251,15 @@ class ArtifactDetailOut(ArtifactOut):
     content: str = ""
 
 
-class AcceptChecklistItem(BaseModel):
-    id: str
-    passed: bool
-    label: str = ""
-
-
 class AcceptRunRequest(BaseModel):
     checklist: list[AcceptChecklistItem] = []
     note: str = ""
+    scenario_results: list[AcceptanceScenarioResult] = Field(default_factory=list, max_length=10)
+
+
+class AcceptanceRejectRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    note: str = Field(min_length=1, max_length=4000)
 
 
 class WorkspaceAuthorizeRequest(BaseModel):
@@ -217,6 +289,8 @@ class LlmProfilesOut(BaseModel):
 class ComparePrdDecisionIn(BaseModel):
     code: str = ""
     question: str = ""
+    options: str = ""
+    recommendation: str = ""
     answer: str = ""
 
 

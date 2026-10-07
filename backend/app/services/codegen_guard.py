@@ -87,13 +87,15 @@ def _looks_like_tryon_source(source: str) -> bool:
     return any(k.lower() in lower if k.isascii() else k in blob for k in keys)
 
 
-def check_tryon_produces_image(app_py_source: str) -> tuple[bool, str]:
+def check_tryon_produces_image(app_py_source: str, *, required: bool | None = None) -> tuple[bool, str]:
     """试衣类源码必须带出图能力；禁止唯一产物为长文换装方案/提示词。
 
     强出图标记：image_base64 / image/png / /preview.png / Image.new / from PIL / PIL。
     仅有上传预览用的 <img、无服务端出图字段，且带换装文案回落特征 → 失败。
     """
-    if not app_py_source or not _looks_like_tryon_source(app_py_source):
+    if required is False:
+        return True, "当前 PRD 未要求图片产物"
+    if required is None and (not app_py_source or not _looks_like_tryon_source(app_py_source)):
         return True, ""
 
     src = app_py_source
@@ -145,9 +147,11 @@ def looks_like_video_idea(idea: str) -> bool:
     return any((k.lower() if k.isascii() else k) in blob for k in keys)
 
 
-def check_video_produces_video(app_py_source: str) -> tuple[bool, str]:
+def check_video_produces_video(app_py_source: str, *, required: bool | None = None) -> tuple[bool, str]:
     """视频类源码必须带可播放视频出口；禁止合成失败时回退纯文案伪装成功。"""
-    if not app_py_source or not _looks_like_video_source(app_py_source):
+    if required is False:
+        return True, "当前 PRD 未要求视频产物"
+    if required is None and (not app_py_source or not _looks_like_video_source(app_py_source)):
         return True, ""
 
     src = app_py_source

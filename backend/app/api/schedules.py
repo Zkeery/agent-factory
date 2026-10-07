@@ -56,7 +56,7 @@ def list_schedules(session: Session = Depends(get_session), user: User = Depends
 def create_schedule(body: CreateScheduleRequest, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
     if body.project_id:
         project = session.get(ProductProject, body.project_id)
-        if project is None or project.user_id != user.id:
+        if project is None or project.user_id != user.id or project.deleted_at is not None:
             raise AppError("project_not_found", "项目不存在", 404)
     item = Schedule(
         id=str(uuid.uuid4()),
@@ -75,6 +75,10 @@ def create_schedule(body: CreateScheduleRequest, session: Session = Depends(get_
 @router.patch("/schedules/{schedule_id}", response_model=ScheduleOut)
 def update_schedule(schedule_id: str, body: UpdateScheduleRequest, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
     item = _schedule_or_404(session, schedule_id, user)
+    if body.enabled is True and item.project_id:
+        project = session.get(ProductProject, item.project_id)
+        if project is None or project.user_id != user.id or project.deleted_at is not None:
+            raise AppError("project_not_found", "项目不存在", 404)
     if body.idea is not None:
         item.idea = body.idea.strip()
     if body.trigger_time is not None:

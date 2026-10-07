@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from app.models import FactoryRun, SessionLocal
 from app.services.stages import Stage
 
@@ -19,8 +21,9 @@ def wait_stage(client, run_id: str, stage: str, timeout: float = 8.0) -> dict:
     raise AssertionError(f"等待阶段 {stage} 超时，当前：{data}")
 
 
-def test_retry_after_cancel(client):
-    r = client.post("/api/v1/runs", json={"idea": "重试用的想法"})
+@pytest.mark.parametrize("execution_mode", ["workflow", "agent_team"])
+def test_retry_after_cancel(client, execution_mode):
+    r = client.post("/api/v1/runs", json={"idea": "重试用的想法", "execution_mode": execution_mode})
     assert r.status_code == 201
     old_id = r.json()["id"]
     wait_stage(client, old_id, "awaiting_answers")
@@ -31,6 +34,7 @@ def test_retry_after_cancel(client):
     body = r.json()
     assert body["id"] != old_id
     assert body["idea"] == "重试用的想法"
+    assert body["execution_mode"] == execution_mode
 
     old = client.get(f"/api/v1/runs/{old_id}").json()
     assert old["current_stage"] == "cancelled"

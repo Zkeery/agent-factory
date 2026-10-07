@@ -15,6 +15,7 @@ from app.schemas import (
     LlmProfilesOut,
 )
 from app.services import llm
+from app.services.decision_context import decision_model_context
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
 
@@ -31,10 +32,7 @@ def get_llm_profiles(user: User = Depends(get_current_user)):
 @router.post("/llm/compare-prd", response_model=ComparePrdOut)
 def compare_prd(body: ComparePrdRequest, user: User = Depends(get_current_user)):
     """同一 idea 串行产出 mock（及可用时 deepseek）PRD 草稿；不创建 Run、不写盘。"""
-    decisions = [
-        {"code": d.code, "question": d.question, "answer": d.answer}
-        for d in body.decisions
-    ]
+    decisions = [decision_model_context(d) for d in body.decisions]
     variants: list[ComparePrdVariantOut] = []
 
     try:

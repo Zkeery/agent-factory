@@ -32,8 +32,8 @@ def has_app_code(run_id: str) -> bool:
         return False
 
 
-def run_tests(run_id: str, idea: str = "") -> tuple[bool, str]:
-    """返回 (是否通过, 说明)。idea 用于视频类运行时护栏。"""
+def run_tests(run_id: str, idea: str = "", *, output_type: str | None = None) -> tuple[bool, str]:
+    """以确认后的输出类型统一静态/运行检查；历史 PRD 才从 idea/source 推断。"""
     d = _code_dir(run_id)
     app = d / "app.py"
     req = d / "requirements.txt"
@@ -55,11 +55,12 @@ def run_tests(run_id: str, idea: str = "") -> tuple[bool, str]:
     if not ok_js:
         return False, f"成品护栏: {msg_js}"
 
-    ok_tryon, msg_tryon = check_tryon_produces_image(source)
+    typed = output_type in {"text", "image", "video", "other"}
+    ok_tryon, msg_tryon = check_tryon_produces_image(source, required=(output_type == "image") if typed else None)
     if not ok_tryon:
         return False, f"成品护栏: {msg_tryon}"
 
-    ok_video, msg_video = check_video_produces_video(source)
+    ok_video, msg_video = check_video_produces_video(source, required=(output_type == "video") if typed else None)
     if not ok_video:
         return False, f"成品护栏: {msg_video}"
 
@@ -72,4 +73,5 @@ def run_tests(run_id: str, idea: str = "") -> tuple[bool, str]:
     if not ok:
         return False, msg
 
-    return probe_runnable(run_id, require_video=looks_like_video_idea(idea))
+    require_video = output_type == "video" if typed else looks_like_video_idea(idea)
+    return probe_runnable(run_id, require_video=require_video)

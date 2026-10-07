@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+export type ExecutionMode = "workflow" | "agent_team";
+
 export type Stage =
   | "idea_submitted"
   | "clarifying"
@@ -31,6 +33,7 @@ export interface Decision {
 }
 
 export interface Evidence {
+  id?: number;
   stage: string;
   title: string;
   content_path: string;
@@ -44,10 +47,36 @@ export interface RunMetric {
   completion_tokens: number;
 }
 
+export interface AcceptanceScenario {
+  id: string;
+  title: string;
+  input: string;
+  expected_output: string;
+}
+
+export interface AcceptanceScenarioResult {
+  scenario_id: string;
+  passed: boolean;
+  observation: string;
+}
+
+export interface AcceptanceChecklistItem {
+  id: string;
+  label: string;
+  passed: boolean;
+}
+
+export interface RequirementFeedback {
+  id: string;
+  feedback: string;
+  created_at: string;
+}
+
 export interface Run {
   id: string;
   idea: string;
   status: string;
+  execution_mode?: ExecutionMode;
   current_stage: Stage;
   failure_reason: string | null;
   failure_code?: string;
@@ -58,6 +87,16 @@ export interface Run {
   llm_provider?: string;
   llm_model?: string;
   auto_schedule_id?: string | null;
+  parent_run_id?: string | null;
+  change_request?: string;
+  requirement_feedback?: RequirementFeedback[];
+  acceptance_mode?: "basic" | "scenario";
+  acceptance_scenarios?: AcceptanceScenario[];
+  acceptance_results?: AcceptanceScenarioResult[];
+  acceptance_checklist?: AcceptanceChecklistItem[];
+  acceptance_note?: string;
+  accepted_at?: string | null;
+  prd_revision?: number;
   decisions: Decision[];
   evidence: Evidence[];
   metric: RunMetric | null;
@@ -80,6 +119,7 @@ export interface RunSummary {
   created_at: string;
   project_id?: string | null;
   auto_schedule_id?: string | null;
+  parent_run_id?: string | null;
 }
 
 export interface RunList {
@@ -167,6 +207,8 @@ export const createRun = (
     project_name?: string;
     workspace_path?: string;
     llm_provider?: string;
+    acceptance_mode?: "basic" | "scenario";
+    execution_mode?: ExecutionMode;
   },
 ) =>
   api<Run>("/api/v1/runs", {
@@ -177,7 +219,7 @@ export const createRun = (
 
 export const getLlmProfiles = () => api<LlmProfiles>("/api/v1/llm/profiles");
 
-export const comparePrd = (idea: string, decisions: { code?: string; question?: string; answer?: string }[] = []) =>
+export const comparePrd = (idea: string, decisions: { code?: string; question?: string; options?: string; recommendation?: string; answer?: string }[] = []) =>
   api<ComparePrdResult>("/api/v1/llm/compare-prd", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -186,6 +228,82 @@ export const comparePrd = (idea: string, decisions: { code?: string; question?: 
 
 export const getRun = (id: string) => api<Run>(`/api/v1/runs/${id}`);
 
+export const supplementRequirements = (id: string, feedback: string) =>
+  api<Run>(`/api/v1/runs/${id}/requirements`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ feedback }),
+  });
+
+export const reviseRun = (id: string, changeRequest: string, requestId?: string) =>
+  api<Run>(`/api/v1/runs/${id}/revise`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ change_request: changeRequest, request_id: requestId }),
+  });
+
+export const saveAcceptanceScenarios = (id: string, scenarios: AcceptanceScenario[]) =>
+  api<Run>(`/api/v1/runs/${id}/acceptance-scenarios`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scenarios }),
+  });
+
+export const saveAcceptanceResults = (id: string, scenarioResults: AcceptanceScenarioResult[]) =>
+  api<Run>(`/api/v1/runs/${id}/acceptance-results`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scenario_results: scenarioResults }),
+  });
+
+export function acceptanceScenarioError(scenarios: AcceptanceScenario[]): string | null {
+  if (scenarios.length < 3 || scenarios.length > 10) return "请填写 3–10 个验收场景。";
+  if (new Set(scenarios.map((item) => item.id)).size !== scenarios.length) return "场景编号重复，请重新添加该场景。";
+  if (scenarios.some((item) => !item.id.trim() || !item.title.trim() || !item.input.trim() || !item.expected_output.trim())) {
+    return "每个场景都需要名称、实际输入和预期结果。";
+  }
+  if (scenarios.some((item) => item.id.length > 64 || item.title.length > 200 || item.input.length > 2000 || item.expected_output.length > 2000)) {
+    return "场景名称最多 200 字，输入和预期结果各最多 2000 字。";
+  }
+  return null;
+}
+
+export function acceptanceResultError(scenarios: AcceptanceScenario[], results: AcceptanceScenarioResult[]): string | null {
+  const scenarioError = acceptanceScenarioError(scenarios);
+  if (scenarioError) return scenarioError;
+  const byId = new Map(results.map((item) => [item.scenario_id, item]));
+  if (byId.size !== results.length || results.length !== scenarios.length || scenarios.some((item) => !byId.has(item.id))) {
+    return "请逐项记录全部验收场景的实际结果。";
+  }
+  if (results.some((item) => !item.observation.trim())) return "请填写每个场景实际看到了什么。";
+  if (results.some((item) => item.observation.length > 4000)) return "每个场景的实际观察最多 4000 字。";
+  if (results.some((item) => !item.passed)) return "仍有场景未通过，请继续修改后再验收。";
+  return null;
+}
+
+export function canReviseRun(run: Run | null): boolean {
+  if (!run || !["awaiting_acceptance", "delivered", "gate_failed", "failed", "cancelled"].includes(run.current_stage)) return false;
+  return run.evidence.some((item) => item.stage === "prd") && run.evidence.some((item) => item.stage === "code");
+}
+
+/** Download through fetch so browser navigation never exposes the access token. */
+export async function downloadRunBundle(id: string, delivered = false): Promise<void> {
+  const response = await fetch(`${BASE}/api/v1/runs/${encodeURIComponent(id)}/bundle`, { headers: authHeaders() });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: { message?: string }; detail?: string } | null;
+    throw new Error(body?.error?.message || (typeof body?.detail === "string" ? body.detail : "交付包下载失败，请重试。"));
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `agent-factory-${id}-${delivered ? "delivered" : "review"}.zip`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Allow the browser to begin reading the Blob before releasing it.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export const answerDecision = (id: string, code: string, answer: string) =>
   api<Run>(`/api/v1/runs/${id}/decisions/${code}/answer`, {
     method: "POST",
@@ -193,11 +311,11 @@ export const answerDecision = (id: string, code: string, answer: string) =>
     body: JSON.stringify({ answer }),
   });
 
-export const confirmPrd = (id: string) =>
+export const confirmPrd = (id: string, prdRevision?: number) =>
   api<Run>(`/api/v1/runs/${id}/confirm-prd`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ confirmed: true }),
+    body: JSON.stringify({ confirmed: true, prd_revision: prdRevision }),
   });
 
 export const rejectPrd = (id: string) =>
@@ -235,9 +353,9 @@ export const scoreRun = (id: string, decision: number, prd: number, code: number
     body: JSON.stringify({ decision, prd, code }),
   });
 
-export const getMetrics = () => api<Metrics>("/api/v1/metrics");
+export const getMetrics = (signal?: AbortSignal) => api<Metrics>("/api/v1/metrics", { signal, cache: "no-store" });
 
-export const getRunList = () => api<RunList>("/api/v1/runs");
+export const getRunList = (signal?: AbortSignal) => api<RunList>("/api/v1/runs", { signal, cache: "no-store" });
 
 /* ---------- 登录/账号 ---------- */
 export interface AuthResult {
@@ -360,11 +478,15 @@ const PM_FAILURE_TEXT: Record<string, { message: string; suggestion: string }> =
   llm_call_failed: { message: "模型没连上，多半是 Key 或网络问题", suggestion: "检查 Key 和网络后重试" },
   unknown_llm_provider: { message: "选的模型不认识", suggestion: "换个模型或跟随全局默认再试" },
   run_stuck: { message: "这一步做太久，已经被中断", suggestion: "点「整段重跑」重新试一次" },
+  agent_execution_failed: { message: "协作执行未完成", suggestion: "查看下方协作记录中的停止原因，再决定是否重新运行" },
   internal_error: { message: "这次没做成功", suggestion: "点「整段重跑」再试，或让开发者看看原因" },
 };
 
 /** PM 视角的失败人话；未知 code 或空走 internal_error 兜底。 */
-export function pmFailureText(code?: string | null): { message: string; suggestion: string } {
+export function pmFailureText(code?: string | null, reason?: string | null): { message: string; suggestion: string } {
+  if (code === "agent_execution_failed" && reason?.endsWith("已达到每轮六次模型调用上限")) {
+    return { message: "本轮协作达到调用上限", suggestion: "执行记录和产物已经保存，可查看协作记录定位停止位置" };
+  }
   return PM_FAILURE_TEXT[code || ""] ?? PM_FAILURE_TEXT.internal_error;
 }
 
@@ -441,6 +563,12 @@ export interface ChatMessage {
   decisions?: Decision[];
 }
 
+/** Newest evidence is selected by identity, never by incidental response order. */
+export function latestEvidence(evidence: Evidence[], stage: string): Evidence | undefined {
+  return evidence.filter((item) => item.stage === stage).reduce<Evidence | undefined>((latest, item) =>
+    !latest || (item.id ?? 0) > (latest.id ?? 0) ? item : latest, undefined);
+}
+
 /** 视图角色：产品经理看主路径，开发者看工厂细节。 */
 export type ViewRole = "pm" | "dev";
 
@@ -449,6 +577,10 @@ export function deriveMessages(run: Run | null, role: ViewRole = "pm"): ChatMess
   if (!run) return [];
   const msgs: ChatMessage[] = [];
   msgs.push({ role: "user", kind: "text", content: run.idea });
+  if (run.change_request) msgs.push({ role: "user", kind: "text", content: `本版修改：${run.change_request}` });
+  for (const item of run.requirement_feedback || []) {
+    msgs.push({ role: "user", kind: "text", content: `补充需求：${item.feedback}` });
+  }
   if (run.decisions.length > 0) {
     msgs.push({ role: "ai", kind: "decisions", content: "动手前，先确认几个关键问题：", decisions: run.decisions });
     for (const d of run.decisions) {
@@ -456,7 +588,7 @@ export function deriveMessages(run: Run | null, role: ViewRole = "pm"): ChatMess
       if (d.is_critical && d.answer) msgs.push({ role: "user", kind: "text", content: d.answer });
     }
   }
-  const prd = run.evidence.find((e) => e.stage === "prd");
+  const prd = latestEvidence(run.evidence, "prd");
   if (prd) msgs.push({ role: "ai", kind: "prd", content: prd.content || prd.title });
   const code = run.evidence.find((e) => e.stage === "code");
   if (code) {
@@ -499,7 +631,7 @@ export interface Schedule {
   created_at?: string;
 }
 
-export const listSchedules = () => api<Schedule[]>("/api/v1/schedules");
+export const listSchedules = (signal?: AbortSignal) => api<Schedule[]>("/api/v1/schedules", { signal, cache: "no-store" });
 
 export const createSchedule = (body: { idea: string; trigger_time: string; project_id?: string | null }) =>
   api<Schedule>("/api/v1/schedules", {
@@ -537,6 +669,12 @@ export interface Artifact {
   content?: string;
 }
 
+export function selectArtifactAfterRefresh(items: Artifact[], selectedId: number | null, newPrdRevision: boolean): Artifact | null {
+  const newest = [...items].sort((a, b) => b.id - a.id);
+  if (newPrdRevision) return newest.find((item) => item.kind === "prd") || newest[0] || null;
+  return newest.find((item) => item.id === selectedId) || newest.find((item) => item.kind === "prd") || newest[0] || null;
+}
+
 /** 产品经理右侧默认可看的产物 kind（对齐 PRD §1.1）。 */
 export const PM_ARTIFACT_KINDS = ["prd", "deploy", "readme"] as const;
 
@@ -568,7 +706,13 @@ export function summarizeDecisionLedger(decisions: Decision[] | null | undefined
   };
 }
 
-export const listProjects = () => api<{ projects: Project[] }>("/api/v1/projects");
+export const listProjects = (deleted = false, signal?: AbortSignal) => api<{ projects: Project[] }>(`/api/v1/projects${deleted ? "?deleted=true" : ""}`, { signal, cache: "no-store" });
+
+export const deleteProject = (id: string) =>
+  api<{ deleted: boolean; project_id: string }>(`/api/v1/projects/${id}`, { method: "DELETE" });
+
+export const restoreProject = (id: string) =>
+  api<Project>(`/api/v1/projects/${id}/restore`, { method: "POST" });
 
 export const getProject = (id: string) => api<Project>(`/api/v1/projects/${id}`);
 
@@ -607,11 +751,19 @@ export const acceptRun = (
   id: string,
   checklist: { id: string; label?: string; passed: boolean }[],
   note = "验收通过",
+  scenarioResults: AcceptanceScenarioResult[] = [],
 ) =>
   api<Run>(`/api/v1/runs/${id}/accept`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ checklist, note }),
+    body: JSON.stringify({ checklist, note, scenario_results: scenarioResults }),
+  });
+
+export const rejectRun = (id: string, note: string) =>
+  api<Run>(`/api/v1/runs/${id}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
   });
 
 /** 管理一次"造物运行"的提交、SSE 订阅与状态回放。 */
@@ -640,7 +792,7 @@ export function useFactoryRun() {
   }, [clearReconnectTimer]);
 
   const applyRun = useCallback((r: Run) => {
-    setRun(r);
+    setRun((previous) => previous?.id === r.id && (previous.prd_revision ?? 0) > (r.prd_revision ?? 0) ? previous : r);
     if (r.current_stage === "gate_passed" || r.current_stage === "awaiting_acceptance" || r.current_stage === "delivered") {
       setFailure(null);
     }
@@ -693,7 +845,7 @@ export function useFactoryRun() {
         getRun(id)
           .then((r) => {
             applyRun(r);
-            if (TERMINAL.includes(r.current_stage)) {
+            if (TERMINAL.includes(r.current_stage) || r.status === "paused") {
               closeEvents();
               return;
             }
@@ -724,12 +876,12 @@ export function useFactoryRun() {
   }, [openEvents]);
 
   const submit = useCallback(
-    async (idea: string, opts?: { llm_provider?: string }) => {
+    async (idea: string, opts?: { llm_provider?: string; execution_mode?: ExecutionMode }) => {
       setFailure(null);
       setLogs([]);
       seenEventIdsRef.current = new Set();
       reconnectAttemptRef.current = 0;
-      const r = await createRun(idea, opts?.llm_provider ? { llm_provider: opts.llm_provider } : undefined);
+      const r = await createRun(idea, { acceptance_mode: "scenario", ...opts });
       applyRun(r);
       if (typeof window !== "undefined") {
         localStorage.setItem("factory_run_id", r.id);
@@ -753,19 +905,58 @@ export function useFactoryRun() {
 
   const restore = useCallback(
     async (id: string) => {
+      closeEvents();
+      runIdRef.current = id;
       setFailure(null);
       setLogs([]);
       seenEventIdsRef.current = new Set();
       reconnectAttemptRef.current = 0;
       const r = await getRun(id);
+      if (runIdRef.current !== id) return;
       applyRun(r);
+      if (typeof window !== "undefined") localStorage.setItem("factory_run_id", id);
       // 未终态且尚未过 PRD 确认，才重连 SSE（PM 路径到 PRD 即止）
-      if (!TERMINAL.includes(r.current_stage) && !isPmComplete(r.current_stage)) {
+      if (!TERMINAL.includes(r.current_stage) && r.status !== "paused" && !isPmComplete(r.current_stage)) {
         openEvents(id);
       }
     },
-    [applyRun, openEvents],
+    [applyRun, openEvents, closeEvents],
   );
+
+  const requirements = useCallback(async (feedback: string) => {
+    if (!run) return;
+    const r = await supplementRequirements(run.id, feedback);
+    if (runIdRef.current !== run.id) return;
+    applyRun(r);
+    if (!TERMINAL.includes(r.current_stage)) openEvents(r.id);
+  }, [run, applyRun, openEvents]);
+
+  const saveScenarios = useCallback(async (scenarios: AcceptanceScenario[]) => {
+    if (!run) return;
+    const r = await saveAcceptanceScenarios(run.id, scenarios);
+    if (runIdRef.current === run.id) applyRun(r);
+  }, [run, applyRun]);
+
+  const saveResults = useCallback(async (results: AcceptanceScenarioResult[]) => {
+    if (!run) return;
+    const r = await saveAcceptanceResults(run.id, results);
+    if (runIdRef.current === run.id) applyRun(r);
+  }, [run, applyRun]);
+
+  const revise = useCallback(async (changeRequest: string, requestId?: string) => {
+    if (!run) return;
+    const r = await reviseRun(run.id, changeRequest, requestId);
+    if (runIdRef.current !== run.id) return;
+    closeEvents();
+    setFailure(null);
+    setLogs([]);
+    seenEventIdsRef.current = new Set();
+    reconnectAttemptRef.current = 0;
+    applyRun(r);
+    if (typeof window !== "undefined") localStorage.setItem("factory_run_id", r.id);
+    if (!TERMINAL.includes(r.current_stage)) openEvents(r.id);
+    else runIdRef.current = r.id;
+  }, [run, applyRun, openEvents, closeEvents]);
 
   const confirm = useCallback(async () => {
     if (!run) return;
@@ -774,14 +965,18 @@ export function useFactoryRun() {
     try {
       // confirm 接口返回时后台线程尚未推进（仍是 awaiting_prd_confirm），
       // 不能应用这个旧 stage，否则会回退；保持乐观 building，让 SSE 跟到终态
-      await confirmPrd(run.id);
+      await confirmPrd(run.id, run.prd_revision);
       openEvents(run.id);
-    } catch {
-      // 失败则回滚到待确认状态，让用户可重试
-      setRun((prev) => (prev ? { ...prev, current_stage: "awaiting_prd_confirm" } : prev));
-      throw new Error("确认失败，请重试");
+    } catch (error) {
+      // A requirement or scenario edit in another tab invalidates this approval.
+      const latest = await getRun(run.id).catch(() => null);
+      if (runIdRef.current === run.id) {
+        if (latest) applyRun(latest);
+        else setRun((prev) => (prev?.id === run.id ? { ...prev, current_stage: "awaiting_prd_confirm" } : prev));
+      }
+      throw error instanceof Error ? error : new Error("确认失败，请重试");
     }
-  }, [run, openEvents]);
+  }, [run, openEvents, applyRun]);
 
   const reject = useCallback(async () => {
     if (!run) return;
@@ -850,5 +1045,5 @@ export function useFactoryRun() {
   const stage = run?.current_stage ?? null;
   const isTerminal = stage !== null && TERMINAL.includes(stage);
 
-  return { run, stage, logs, failure, isTerminal, submit, restore, answer, confirm, reject, cancel, retry, retest, score, reset };
+  return { run, stage, logs, failure, isTerminal, submit, restore, answer, confirm, reject, cancel, retry, retest, score, reset, requirements, saveScenarios, saveResults, revise };
 }

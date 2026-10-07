@@ -7,7 +7,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from app.models import FactoryRun, Schedule, SessionLocal, init_db
+from app.models import FactoryRun, ProductProject, Schedule, SessionLocal, init_db
 from app.services.stages import Stage
 
 logger = logging.getLogger("factory.scheduler")
@@ -19,7 +19,12 @@ def _local_now() -> datetime:
     return datetime.now().astimezone()
 
 
-def _fire(schedule: Schedule, session) -> FactoryRun:
+def _fire(schedule: Schedule, session) -> FactoryRun | None:
+    if schedule.project_id:
+        project = session.get(ProductProject, schedule.project_id)
+        if project is not None and project.deleted_at is not None:
+            schedule.enabled = False
+            return None
     run = FactoryRun(
         id=str(uuid.uuid4()),
         idea=schedule.idea,
@@ -57,6 +62,9 @@ def check_due_schedules() -> int:
                 if last.astimezone().date() == today:
                     continue
             run = _fire(s, session)
+            if run is None:
+                session.commit()
+                continue
             s.last_run_at = datetime.now(timezone.utc)
             session.commit()
             engine.start_run_async(run.id)

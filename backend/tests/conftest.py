@@ -15,13 +15,16 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models import Base, SessionLocal, engine
+from app.services import engine as run_engine
 
 
 @pytest.fixture(autouse=True)
 def clean_db():
+    run_engine.wait_for_background_runs()
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     yield
+    run_engine.wait_for_background_runs()
     Base.metadata.drop_all(engine)
 
 

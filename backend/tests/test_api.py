@@ -57,12 +57,14 @@ def test_duplicate_answer_idempotent(client):
     run_id = r.json()["id"]
     data = wait_stage(client, run_id, "awaiting_answers")
     code = data["decisions"][0]["code"]
-    assert client.post(f"/api/v1/runs/{run_id}/decisions/{code}/answer", json={"answer": "A"}).status_code == 200
+    first = client.post(f"/api/v1/runs/{run_id}/decisions/{code}/answer", json={"answer": "A"})
+    assert first.status_code == 200
+    first_answer = next(d["answer"] for d in first.json()["decisions"] if d["code"] == code)
     # 幂等：关键决策重复回答返回 200，但答案不变
     r2 = client.post(f"/api/v1/runs/{run_id}/decisions/{code}/answer", json={"answer": "B"})
     assert r2.status_code == 200
     d = [x for x in r2.json()["decisions"] if x["code"] == code][0]
-    assert d["answer"] == "A"
+    assert d["answer"] == first_answer
 
 
 def test_noncritical_can_reanswer(client):
@@ -132,7 +134,9 @@ def test_list_runs(client):
     assert r1.json()["id"] in ids
     assert ids.index(r2.json()["id"]) < ids.index(r1.json()["id"])
     for r in runs:
-        assert set(r.keys()) == {"id", "idea", "current_stage", "status", "created_at", "project_id", "auto_schedule_id"}
+        assert set(r.keys()) == {"id", "idea", "current_stage", "status", "created_at", "project_id", "auto_schedule_id", "parent_run_id", "execution_mode"}
+        assert r["execution_mode"] == "workflow"
+        assert r["parent_run_id"] is None
 
 
 def test_noncritical_reanswer_at_prd_confirm_regenerates_prd(client):

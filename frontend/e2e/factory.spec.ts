@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-test("完整闭环：登录 → 提交想法 → 决策卡快捷按钮 → PRD → 确认 → 验收 → 完成", async ({ page }) => {
+test("完整闭环：登录 → 想法 → 决策 → 编辑验收场景 → PRD确认 → 记录观察 → 交付包", async ({ page }) => {
   await page.goto("/");
 
   // 手机号验证码登录（mock 短信：验证码自动填入）
@@ -35,17 +35,33 @@ test("完整闭环：登录 → 提交想法 → 决策卡快捷按钮 → PRD �
 
   // 等 PRD 卡片与确认按钮出现
   await expect(page.getByRole("button", { name: "确认 PRD", exact: true })).toBeVisible({ timeout: 20_000 });
+  await page.getByLabel("场景 1 预期结果", { exact: true }).fill("提供多个可以复制的宠物名字，不返回空结果。");
+  await expect(page.getByRole("button", { name: "确认 PRD", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "保存验收场景", exact: true }).click();
+  await expect(page.getByRole("button", { name: "确认 PRD", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "确认 PRD", exact: true }).click();
 
-  // 确认后流水线跑到待验收，勾选三项清单后交付
+  // 自动化只验证表单与接口闭环，下面的观察是测试数据，不代替真实用户试用。
   await expect(page.getByRole("button", { name: "验收通过，交付", exact: true })).toBeVisible({ timeout: 30_000 });
+  const acceptBtn = page.getByRole("button", { name: "验收通过，交付", exact: true });
+  await expect(acceptBtn).toBeDisabled();
+  const observations = page.getByLabel(/^场景 \d+ 实际结果$/);
+  expect(await observations.count()).toBeGreaterThanOrEqual(3);
+  for (let i = 0; i < await observations.count(); i++) {
+    await observations.nth(i).fill(`自动化表单测试记录 ${i + 1}：模拟已执行此场景并检查结果，不代替人工试用。`);
+  }
+  await page.getByRole("button", { name: "保存试用记录", exact: true }).click();
+  await expect(page.getByText("试用记录已保存，之后可以继续验收或修改。", { exact: true })).toBeVisible();
   for (const cb of await page.getByRole("checkbox").all()) {
     await cb.check();
   }
-  const acceptBtn = page.getByRole("button", { name: "验收通过，交付", exact: true });
   await expect(acceptBtn).toBeEnabled();
   await acceptBtn.click();
 
   // 交付完成消息
   await expect(page.getByText("已验收交付。可预览运行成品。")).toBeVisible({ timeout: 30_000 });
+  const downloadEvent = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载完整交付包", exact: true }).click();
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toMatch(/^agent-factory-.+-delivered\.zip$/);
 });

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -9,7 +10,8 @@ from sqlalchemy.orm import Session
 from app.api.runs import get_session
 from app.core.auth import get_current_user, require_api_key
 from app.core.errors import AppError
-from app.models import FactoryRun, ProductProject, User
+from app.models import FactoryRun, ProductProject, Schedule, User
+from app.services.stages import Stage
 from app.schemas import (
     CreateProjectRequest,
     ProjectListOut,
@@ -35,18 +37,19 @@ def _project_out(session: Session, project: ProductProject) -> ProjectOut:
     )
 
 
-def _project_or_404(session: Session, project_id: str, user: User) -> ProductProject:
+def _project_or_404(session: Session, project_id: str, user: User, *, include_deleted: bool = False) -> ProductProject:
     project = session.get(ProductProject, project_id)
-    if project is None or project.user_id != user.id:
+    if project is None or project.user_id != user.id or (project.deleted_at is not None and not include_deleted):
         raise AppError("project_not_found", "项目不存在", 404)
     return project
 
 
 @router.get("/projects", response_model=ProjectListOut)
-def list_projects(session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+def list_projects(deleted: bool = False, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
     rows = (
         session.query(ProductProject)
-        .filter(ProductProject.user_id == user.id)
+        .filter(ProductProject.user_id == user.id,
+                ProductProject.deleted_at.is_not(None) if deleted else ProductProject.deleted_at.is_(None))
         .order_by(ProductProject.updated_at.desc())
         .all()
     )
@@ -75,6 +78,38 @@ def create_project(
 @router.get("/projects/{project_id}", response_model=ProjectOut)
 def get_project(project_id: str, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
     return _project_out(session, _project_or_404(session, project_id, user))
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    project = _project_or_404(session, project_id, user, include_deleted=True)
+    if project.deleted_at is None:
+        automatic = {
+            Stage.IDEA_SUBMITTED.value, Stage.CLARIFYING.value, Stage.PRD_DRAFTING.value,
+            Stage.BUILDING.value, Stage.TESTING.value, Stage.DEPLOYING.value,
+            Stage.EVIDENCE_READY.value, Stage.GATE_PASSED.value,
+        }
+        busy = session.query(FactoryRun.id).filter(
+            FactoryRun.project_id == project_id, FactoryRun.status == "running",
+            FactoryRun.current_stage.in_(automatic),
+        ).first()
+        if busy:
+            raise AppError("project_busy", "项目仍在执行，请等待当前步骤结束后再删除", 409)
+        project.deleted_at = datetime.now(timezone.utc)
+    session.query(Schedule).filter(Schedule.project_id == project_id, Schedule.enabled.is_(True)).update(
+        {Schedule.enabled: False}, synchronize_session=False,
+    )
+    session.commit()
+    return {"deleted": True, "project_id": project_id}
+
+
+@router.post("/projects/{project_id}/restore", response_model=ProjectOut)
+def restore_project(project_id: str, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    project = _project_or_404(session, project_id, user, include_deleted=True)
+    project.deleted_at = None
+    session.commit()
+    session.refresh(project)
+    return _project_out(session, project)
 
 
 @router.patch("/projects/{project_id}", response_model=ProjectOut)

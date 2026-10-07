@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from app.core.config import settings
@@ -27,12 +27,14 @@ class ProductProject(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     idea_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     workspace_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class FactoryRun(Base):
     __tablename__ = "factory_runs"
+    __table_args__ = (Index("uq_run_revision_request", "parent_run_id", "revision_request_id", unique=True),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     idea: Mapped[str] = mapped_column(Text, nullable=False)
@@ -48,6 +50,23 @@ class FactoryRun(Base):
     workspace_always_allow: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     llm_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     llm_model_snapshot: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    execution_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="workflow")
+    # Harness 私有检查点；对外仅返回脱敏后的任务、工具与交接摘要。
+    execution_state: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    parent_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    revision_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    change_request: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 父 PRD/源文件在创建子版本时快照，后续不依赖父文件是否被手工修改。
+    parent_context: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    requirement_feedback: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    prd_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prd_snapshot: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    acceptance_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="basic")
+    acceptance_scenarios: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    acceptance_results: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    acceptance_checklist: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    acceptance_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -109,6 +128,10 @@ class RunMetric(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cost_estimate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    pricing_snapshots: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    accounting_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    recorded_segments: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_segments: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     score_decision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     score_prd: Mapped[int | None] = mapped_column(Integer, nullable=True)
     score_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -198,7 +221,42 @@ def _migrate_schema(engine) -> None:
             conn.execute(text("ALTER TABLE factory_runs ADD COLUMN failure_code VARCHAR(32) DEFAULT ''"))
         if "auto_schedule_id" not in fr_cols:
             conn.execute(text("ALTER TABLE factory_runs ADD COLUMN auto_schedule_id VARCHAR(36)"))
-        # product_projects 由 create_all 建表
+        iteration_columns = {
+            "execution_mode": "VARCHAR(32) NOT NULL DEFAULT 'workflow'",
+            "execution_state": "TEXT NOT NULL DEFAULT '{}'",
+            "parent_run_id": "VARCHAR(36)",
+            "revision_request_id": "VARCHAR(128)",
+            "change_request": "TEXT NOT NULL DEFAULT ''",
+            "parent_context": "TEXT NOT NULL DEFAULT '{}'",
+            "requirement_feedback": "TEXT NOT NULL DEFAULT '[]'",
+            "prd_revision": "INTEGER NOT NULL DEFAULT 0",
+            "prd_snapshot": "TEXT NOT NULL DEFAULT '{}'",
+            "acceptance_mode": "VARCHAR(16) NOT NULL DEFAULT 'basic'",
+            "acceptance_scenarios": "TEXT NOT NULL DEFAULT '[]'",
+            "acceptance_results": "TEXT NOT NULL DEFAULT '[]'",
+            "acceptance_checklist": "TEXT NOT NULL DEFAULT '[]'",
+            "acceptance_note": "TEXT NOT NULL DEFAULT ''",
+            "accepted_at": "DATETIME",
+        }
+        for name, definition in iteration_columns.items():
+            if name not in fr_cols:
+                conn.execute(text(f"ALTER TABLE factory_runs ADD COLUMN {name} {definition}"))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_run_revision_request "
+            "ON factory_runs (parent_run_id, revision_request_id)"
+        ))
+        metric_cols = {c["name"] for c in inspector.get_columns("run_metrics")}
+        for name, definition in {
+            "pricing_snapshots": "TEXT NOT NULL DEFAULT '[]'",
+            "accounting_version": "INTEGER NOT NULL DEFAULT 0",
+            "recorded_segments": "INTEGER NOT NULL DEFAULT 0",
+            "failed_segments": "INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            if name not in metric_cols:
+                conn.execute(text(f"ALTER TABLE run_metrics ADD COLUMN {name} {definition}"))
+        project_cols = {c["name"] for c in inspector.get_columns("product_projects")}
+        if "deleted_at" not in project_cols:
+            conn.execute(text("ALTER TABLE product_projects ADD COLUMN deleted_at DATETIME"))
         if "evidence_items" in inspector.get_table_names():
             ev_cols = {c["name"] for c in inspector.get_columns("evidence_items")}
             if "kind" not in ev_cols:

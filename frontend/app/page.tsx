@@ -1,19 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, Send } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUpRight, ArrowRight, BarChart3, GitBranch, Plus, Layers3, FolderOpen, Clock3, LogOut, ChevronRight, PanelRight, Menu, X } from "lucide-react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   acceptRun,
+  rejectRun,
+  acceptanceScenarioError,
+  canReviseRun,
   authorizeWorkspace,
   canFullRetry,
   canRetestInPlace,
   canShowAlwaysAllow,
   DEFAULT_ACCEPTANCE_CHECKLIST,
   Artifact,
-  ChatMessage,
   Decision,
-  deriveMessages,
   filterArtifactsForRole,
   ViewRole,
   getArtifact,
@@ -22,6 +24,8 @@ import {
   getRunList,
   listArtifacts,
   listProjects,
+  deleteProject,
+  restoreProject,
   Metrics,
   needsWorkspaceAuth,
   PM_STAGE_ORDER,
@@ -55,80 +59,111 @@ import {
   getAppStatus,
   summarizeAppStatus,
   summarizeDecisionLedger,
+  selectArtifactAfterRefresh,
   AppRunStatus,
+  type AcceptanceChecklistItem,
+  type AcceptanceScenario,
+  type AcceptanceScenarioResult,
+  type Run,
+  type ExecutionMode,
 } from "@/lib/factory";
 import { cn } from "@/lib/utils";
+import { WorkspaceHome, WorkflowProgress } from "@/components/WorkspaceHome";
+import { ExecutionPanel } from "@/components/ExecutionPanel";
+import { ProjectReview } from "@/components/ProjectReview";
+import { ProjectDeleteDialog } from "@/components/ProjectDeleteDialog";
+import { ProjectNavigation, ProjectVersionPicker } from "@/components/ProjectNavigation";
+import { DecisionPrompt } from "@/components/DecisionPrompt";
+import { resumeExecution } from "@/lib/agentInsights";
+import { buildFailureRevisionDraft } from "@/lib/acceptanceDraft";
+import { startWorkspaceSync } from "@/lib/workspaceSync";
+import {
+  AcceptanceRecord,
+  AcceptanceScenariosEditor,
+  BundleDownload,
+  RequirementsForm,
+  RevisionForm,
+  ScenarioAcceptancePanel,
+} from "@/components/RunImprovements";
+
+const productMarkdownComponents: Components = {
+  table: ({ children }) => (
+    <div className="prose-table-scroll" role="region" aria-label="文档表格，可横向滚动" tabIndex={0}>
+      <table>{children}</table>
+    </div>
+  ),
+};
 
 /* ---------- 左栏：任务列表 ---------- */
 function TaskList({
   runs,
   currentId,
+  currentProjectId,
   onSelect,
+  onNew,
+  busy,
+  onReview,
+  reviewActive,
   role,
   onRoleChange,
-  projectCount,
+  projects,
+  deletedProjects,
+  onDeleteProject,
+  onRestoreProject,
   schedules,
   onCreateSchedule,
   onToggleSchedule,
   onDeleteSchedule,
+  syncStatus,
+  scheduleNotice,
 }: {
   runs: RunSummary[];
   currentId: string | null;
+  currentProjectId: string | null;
   onSelect: (id: string) => void;
+  onNew: () => void;
+  busy: boolean;
+  onReview: () => void;
+  reviewActive: boolean;
   role: ViewRole;
   onRoleChange: (r: ViewRole) => void;
-  projectCount: number;
+  projects: Project[];
+  deletedProjects: Project[];
+  onDeleteProject: (id: string) => void;
+  onRestoreProject: (id: string) => void;
   schedules: Schedule[];
-  onCreateSchedule: (idea: string, triggerTime: string) => void;
+  onCreateSchedule: (idea: string, triggerTime: string) => Promise<void>;
   onToggleSchedule: (s: Schedule) => void;
   onDeleteSchedule: (id: string) => void;
+  syncStatus: string;
+  scheduleNotice: { id: string; idea: string } | null;
 }) {
   const [showNew, setShowNew] = useState(false);
   const [newIdea, setNewIdea] = useState("");
   const [newTime, setNewTime] = useState("09:00");
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   return (
-    <div className="flex h-full flex-col">
-      <div className="m-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "var(--color-line)", color: "var(--color-muted)" }}>
-        <Search size={14} />
-        搜索任务
-      </div>
-      <div className="mx-3 mb-2 flex gap-1 text-xs">
-        <button className={cn("rounded-full px-2 py-0.5", role === "pm" ? "bg-brand-soft text-brand-2" : "text-muted")} onClick={() => onRoleChange("pm")}>产品经理</button>
-        <button className={cn("rounded-full px-2 py-0.5", role === "dev" ? "bg-brand-soft text-brand-2" : "text-muted")} onClick={() => onRoleChange("dev")}>开发者</button>
-      </div>
-      {projectCount > 0 && (
-        <div className="mx-3 mb-2 text-[11px]" style={{ color: "var(--color-muted)" }}>{projectCount} 个项目</div>
-      )}
-      <div className="flex-1 space-y-0.5 overflow-auto px-2">
-        {runs.map((r) => {
-          const failed = r.current_stage === "failed" || r.current_stage === "gate_failed";
-          return (
-            <button
-              key={r.id}
-              onClick={() => onSelect(r.id)}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition",
-                r.id === currentId ? "bg-brand-soft" : "hover:bg-black/5",
-              )}
-            >
-              {r.auto_schedule_id && (
-                <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px]" style={{ background: "var(--warn-soft)", color: "var(--warn)" }}>自动</span>
-              )}
-              <span className="min-w-0 flex-1 truncate">{r.idea}</span>
-              <span
-                className="shrink-0 rounded-full px-2 py-0.5 text-xs"
-                style={failed ? { background: "var(--danger-soft)", color: "var(--danger)" } : { background: "var(--brand-soft)", color: "var(--brand)" }}
-              >
-                {role === "pm" ? pmStageLabel(r.current_stage) : (STAGE_CN[r.current_stage] || r.current_stage)}
-              </span>
-            </button>
-          );
-        })}
-        {runs.length === 0 && <div className="px-3 py-6 text-center text-sm" style={{ color: "var(--color-muted)" }}>暂无任务</div>}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <button disabled={busy} onClick={onNew} className="flex h-[76px] shrink-0 items-center gap-2.5 px-5 text-left" aria-label="返回工作台">
+        <span className="factory-logo"><Layers3 size={20} /></span>
+        <span><span className="block text-[15px] font-semibold tracking-tight">Agent 造物坊</span><span className="mt-0.5 block font-mono text-[9px] tracking-[0.16em] text-muted">IDEAS INTO REALITY</span></span>
+      </button>
+      <button disabled={busy} className="button-primary mx-4 mb-5 justify-center" onClick={onNew}><Plus size={16} />创建新项目</button>
+      <button disabled={busy} className={cn("mx-4 mb-4 flex items-center gap-2 rounded-lg px-3 py-2 text-xs", reviewActive ? "bg-brand-soft font-medium text-brand" : "text-muted hover:bg-surface-2")} onClick={onReview}><BarChart3 size={15} />项目复盘</button>
+      {scheduleNotice && <button disabled={busy} onClick={() => onSelect(scheduleNotice.id)} className="mx-4 mb-3 rounded-lg border border-brand/30 bg-brand-soft px-3 py-2 text-left text-xs text-brand" aria-label={`查看定时新项目：${scheduleNotice.idea}`}>
+        <span className="block font-medium">定时任务已生成 · 查看</span>
+        <span className="mt-1 block truncate">{scheduleNotice.idea}</span>
+      </button>}
+      <ProjectNavigation projects={projects} runs={runs} deletedProjects={deletedProjects} currentId={currentId} currentProjectId={currentProjectId} busy={busy} role={role} onSelect={onSelect} onDelete={onDeleteProject} onRestore={onRestoreProject} />
+      <p className="mx-5 mt-2 text-[10px] text-muted" role="status">{syncStatus}</p>
+      <div className="mx-4 mb-4 mt-4 rounded-lg bg-surface-2 p-1 flex gap-1 text-[11px]">
+        <button className={cn("flex-1 rounded-md py-1.5", role === "pm" ? "bg-panel text-ink shadow-sm" : "text-muted")} onClick={() => onRoleChange("pm")}>产品视角</button>
+        <button className={cn("flex-1 rounded-md py-1.5", role === "dev" ? "bg-panel text-ink shadow-sm" : "text-muted")} onClick={() => onRoleChange("dev")}>开发视角</button>
       </div>
       <div className="shrink-0 border-t px-3 py-2" style={{ borderColor: "var(--color-line)" }}>
         <div className="flex items-center justify-between">
-          <span className="text-xs font-medium" style={{ color: "var(--color-muted)" }}>定时任务</span>
+          <span className="flex items-center gap-2 text-xs font-medium" style={{ color: "var(--color-muted)" }}><Clock3 size={14} />定时任务</span>
           <button className="text-xs" style={{ color: "var(--color-primary)" }} onClick={() => setShowNew((v) => !v)}>{showNew ? "收起" : "新建"}</button>
         </div>
         {showNew && (
@@ -144,31 +179,44 @@ function TaskList({
               />
             </div>
             <div className="flex items-end gap-2">
-              <div>
-                <div className="mb-1 text-[11px]" style={{ color: "var(--color-muted)" }}>每天时间</div>
-                <input
-                  className="w-20 rounded-lg border px-2 py-1.5 text-xs outline-none"
-                  style={{ borderColor: "var(--color-line)", background: "var(--color-bg)" }}
-                  placeholder="09:00"
-                  value={newTime}
-                  onChange={(e) => setNewTime(e.target.value)}
-                />
-              </div>
+              <fieldset className="min-w-0">
+                <legend className="mb-1 text-[11px] text-muted">每天时间</legend>
+                <div className="flex items-center gap-1">
+                  <select aria-label="小时" disabled={savingSchedule} className="rounded-lg border border-line bg-panel px-1 py-1.5 text-xs" value={newTime.split(":")[0]} onChange={(e) => setNewTime(`${e.target.value}:${newTime.split(":")[1]}`)}>
+                    {Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0")).map((hour) => <option key={hour} value={hour}>{hour} 时</option>)}
+                  </select>
+                  <span className="text-xs text-muted">:</span>
+                  <select aria-label="分钟" disabled={savingSchedule} className="rounded-lg border border-line bg-panel px-1 py-1.5 text-xs" value={newTime.split(":")[1]} onChange={(e) => setNewTime(`${newTime.split(":")[0]}:${e.target.value}`)}>
+                    {Array.from({ length: 60 }, (_, minute) => String(minute).padStart(2, "0")).map((minute) => <option key={minute} value={minute}>{minute} 分</option>)}
+                  </select>
+                </div>
+              </fieldset>
               <button
-                className="rounded-full px-3 py-1 text-xs text-[#0a0b0e]"
+                className="shrink-0 rounded-full px-2 py-1.5 text-xs text-[#0a0b0e] disabled:opacity-50"
                 style={{ background: "var(--gradient-brand)" }}
-                onClick={() => {
-                  if (!newIdea.trim()) return;
-                  onCreateSchedule(newIdea.trim(), newTime);
-                  setNewIdea("");
-                  setNewTime("09:00");
+                disabled={savingSchedule || !newIdea.trim()}
+                onClick={async () => {
+                  if (!newIdea.trim() || savingSchedule) return;
+                  setSavingSchedule(true);
+                  setScheduleError(null);
+                  try {
+                    await onCreateSchedule(newIdea.trim(), newTime);
+                    setNewIdea("");
+                    setNewTime("09:00");
+                  } catch (error) {
+                    setScheduleError(error instanceof Error ? error.message : "保存失败，请重试。");
+                  } finally {
+                    setSavingSchedule(false);
+                  }
                 }}
               >
-                保存
+                {savingSchedule ? "保存中" : "保存"}
               </button>
             </div>
+            {scheduleError && <p role="alert" className="text-[11px] text-red-600">{scheduleError}</p>}
           </div>
         )}
+        <p className="mt-2 text-[10px] leading-relaxed text-muted">到点后自动运行，项目列表会自动更新。</p>
         {schedules.length > 0 && (
           <div className="mt-2 space-y-1">
             {schedules.map((s) => (
@@ -197,8 +245,16 @@ function TaskList({
 /* ---------- 中栏：消息气泡 ---------- */
 
 /* ---------- 验收清单勾选（PRD §4.1） ---------- */
-function AcceptancePanel({ onAccept }: { onAccept: (checklist: { id: string; label: string; passed: boolean }[]) => void }) {
+function AcceptancePanel({ onAccept, onReject, previousRejection = "", busy }: {
+  onAccept: (checklist: AcceptanceChecklistItem[]) => Promise<void>;
+  onReject: (note: string) => Promise<void>;
+  previousRejection?: string;
+  busy: boolean;
+}) {
   const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState(!!previousRejection);
+  const [rejectionNote, setRejectionNote] = useState(previousRejection);
   const allPassed = DEFAULT_ACCEPTANCE_CHECKLIST.every((i) => checked[i.id]);
   function toggle(id: string) {
     setChecked((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -211,112 +267,46 @@ function AcceptancePanel({ onAccept }: { onAccept: (checklist: { id: string; lab
             <input
               type="checkbox"
               className="mt-0.5"
-              checked={!!checked[item.id]}
+                checked={!!checked[item.id]}
+                disabled={busy}
               onChange={() => toggle(item.id)}
             />
             <span>{item.label}</span>
           </label>
         ))}
       </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+      <button type="button" className="button-secondary" disabled={busy} onClick={() => { setRejecting((value) => !value); setError(null); }}>不通过</button>
       <button
-        className="mt-3 rounded-full px-4 py-1.5 text-xs text-[#0a0b0e] disabled:opacity-40"
+        className="rounded-full px-4 py-1.5 text-xs text-[#0a0b0e] disabled:opacity-40"
         style={{ background: "var(--gradient-brand)" }}
-        disabled={!allPassed}
-        onClick={() =>
-          onAccept(
+        disabled={!allPassed || busy}
+        onClick={async () => {
+          setError(null);
+          try { await onAccept(
             DEFAULT_ACCEPTANCE_CHECKLIST.map((i) => ({
               id: i.id,
               label: i.label,
               passed: !!checked[i.id],
             })),
-          )
-        }
+          ); } catch (err) { setError(err instanceof Error ? err.message : "验收未保存，请重试。"); }
+        }}
       >
         验收通过，交付
       </button>
-    </div>
-  );
-}
-
-const BUBBLE_TITLE: Record<string, string> = {
-  text: "",
-  decisions: "🧭 决策确认",
-  prd: "📋 PRD",
-  code: "🧩 代码产物",
-  deploy: "🚀 运行说明",
-  acceptance: "✅ 待验收",
-  done: "🎉 已交付",
-};
-
-function Bubble({ msg, stage, onAnswer, onAccept, onPreview }: { msg: ChatMessage; stage: string | null; onAnswer: (code: string, value: string) => void; onAccept: (checklist: { id: string; label: string; passed: boolean }[]) => void; onPreview: () => void }) {
-  if (msg.role === "user") {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[75%] rounded-[20px] rounded-br-md px-4 py-2.5 text-sm text-[#0a0b0e]" style={{ background: "var(--gradient-brand)" }}>
-          {msg.content}
-        </div>
       </div>
-    );
-  }
-
-  const title = BUBBLE_TITLE[msg.kind] || "";
-
-  // AI 消息：卡片化；code/deploy 只展示短摘要，不渲染大段 pre
-  return (
-    <div className="flex justify-start">
-      <div className="max-w-[82%]">
-        <div className="mb-1 text-xs" style={{ color: "var(--color-muted)" }}>造物坊 AI</div>
-        <div className="rounded-[20px] rounded-bl-md border px-4 py-2.5 text-sm" style={{ borderColor: "var(--color-line)", background: "var(--color-surface)" }}>
-          {title && (
-            <div className="mb-1.5 text-xs font-semibold" style={{ color: "var(--color-primary)" }}>
-              {title}
-            </div>
-          )}
-          {(msg.kind === "text" || msg.kind === "decisions") && msg.content}
-          {msg.kind === "decisions" && msg.decisions && (
-            <DecisionsInline decisions={msg.decisions} onAnswer={onAnswer} stage={stage} />
-          )}
-          {msg.kind === "prd" && (
-            <div className="mt-1 rounded-xl bg-surface-2 p-3">
-              <div className="prose prose-sm prose-invert max-w-none text-xs leading-relaxed" style={{ color: "var(--color-muted)" }}>
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
-              </div>
-            </div>
-          )}
-          {msg.kind === "code" && (
-            <div className="mt-1 rounded-xl bg-surface-2 p-3 text-xs leading-relaxed" style={{ color: "var(--color-muted)" }}>
-              {msg.content}
-            </div>
-          )}
-          {msg.kind === "deploy" && (
-            <div className="mt-1 rounded-xl bg-surface-2 p-3 text-xs" style={{ color: "var(--color-muted)" }}>
-              {msg.content}
-            </div>
-          )}
-          {msg.kind === "acceptance" && (
-            <div className="mt-1 space-y-2">
-              <div className="rounded-xl bg-warn-soft p-3 text-sm">
-                <div className="font-medium">{msg.content}</div>
-              </div>
-              {stage === "awaiting_acceptance" && <AcceptancePanel onAccept={onAccept} />}
-            </div>
-          )}
-          {msg.kind === "done" && (
-            <div className="mt-1 rounded-xl bg-ok-soft p-3 text-sm">
-              <div className="font-medium" style={{ color: "var(--color-ok)" }}>{msg.content}</div>
-              <button className="mt-2 rounded-full px-4 py-1.5 text-xs text-[#0a0b0e] transition hover:opacity-90" style={{ background: "var(--gradient-brand)" }} onClick={onPreview}>
-                预览成品 →
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
+      {rejecting && <div className="mt-4 space-y-3 border-t border-line pt-4">
+        <label className="block space-y-2 text-xs font-medium"><span>哪里不符合预期？</span><textarea className="input-field min-h-24" rows={3} maxLength={4000} value={rejectionNote} disabled={busy} placeholder="写下你的操作、预期结果和实际遇到的问题，例如：人机对战落下一枚黑子后，AI 一直不落白子。" onChange={(event) => setRejectionNote(event.target.value)} /></label>
+        <p className="text-xs leading-relaxed text-muted">保存问题后准备修复草稿。当前版本保留，修复版完成后重新验收。</p>
+        <button type="button" className="button-secondary" disabled={busy || !rejectionNote.trim()} onClick={async () => { setError(null); try { await onReject(rejectionNote.trim()); } catch (err) { setError(err instanceof Error ? err.message : "问题未保存，请重试。"); } }}>保存问题并准备修复</button>
+      </div>}
+      {error && <p role="alert" className="mt-2 text-xs" style={{ color: "var(--danger)" }}>{error}</p>}
     </div>
   );
 }
 
 /* ---------- 决策卡快捷按钮 ---------- */
-function DecisionsInline({ decisions, onAnswer, stage }: { decisions: Decision[]; onAnswer: (code: string, value: string) => void; stage: string | null }) {
+function DecisionsInline({ decisions, onAnswer, stage, busy = false }: { decisions: Decision[]; onAnswer: (code: string, value: string) => void; stage: string | null; busy?: boolean }) {
   const [editing, setEditing] = useState<string | null>(null);
   const open = decisions.filter((d) => d.status !== "answered");
   const answered = decisions.filter((d) => d.status === "answered");
@@ -329,12 +319,12 @@ function DecisionsInline({ decisions, onAnswer, stage }: { decisions: Decision[]
         const o = opt.trim();
         if (!o) return null;
         return (
-          <button key={o} className="rounded-full px-4 py-1.5 text-xs transition hover:opacity-80" style={{ background: "var(--surface-2)", color: "var(--ink-soft)" }} onClick={() => { onAnswer(d.code, o); setEditing(null); }}>
+          <button disabled={busy} key={o} className="rounded-full px-4 py-1.5 text-xs transition hover:opacity-80 disabled:opacity-40" style={{ background: "var(--surface-2)", color: "var(--ink-soft)" }} onClick={() => { onAnswer(d.code, o); setEditing(null); }}>
             {o}
           </button>
         );
       })}
-      <button className="rounded-full px-4 py-1.5 text-xs text-[#0a0b0e] transition hover:opacity-90" style={{ background: "var(--gradient-brand)" }} onClick={() => { onAnswer(d.code, "按推荐"); setEditing(null); }}>
+      <button disabled={busy} className="rounded-full px-4 py-1.5 text-xs text-[#0a0b0e] transition hover:opacity-90 disabled:opacity-40" style={{ background: "var(--gradient-brand)" }} onClick={() => { onAnswer(d.code, "按推荐"); setEditing(null); }}>
         按推荐
       </button>
     </div>
@@ -351,11 +341,11 @@ function DecisionsInline({ decisions, onAnswer, stage }: { decisions: Decision[]
         ))}
         {answered.map((d) => (
           <div key={d.code} className="text-xs" style={{ color: "var(--ok)" }}>
-            {d.is_critical ? "✓" : "⚙️"} {d.question} → {d.answer}
+            {d.is_critical ? "已确认 ·" : "默认 ·"} {d.question} → {d.answer}
             {!d.is_critical && editable && (
               <>
                 <span style={{ color: "var(--color-muted)" }}>（已按推荐自动）</span>
-                <button className="ml-2 rounded-full px-2 py-0.5 text-xs transition hover:opacity-80" style={{ background: "var(--surface-2)", color: "var(--ink-soft)" }} onClick={() => setEditing(editing === d.code ? null : d.code)}>
+                <button disabled={busy} className="ml-2 rounded-full px-2 py-0.5 text-xs transition hover:opacity-80 disabled:opacity-40" style={{ background: "var(--surface-2)", color: "var(--ink-soft)" }} onClick={() => setEditing(editing === d.code ? null : d.code)}>
                   改
                 </button>
               </>
@@ -392,12 +382,14 @@ function SessionRail({
   run,
   role,
   onConfirm,
-  onAccept,
+  confirmDisabled,
+  confirmHint,
 }: {
   run: ReturnType<typeof useFactoryRun>["run"];
   role: ViewRole;
   onConfirm: () => void;
-  onAccept: (checklist: { id: string; label: string; passed: boolean }[]) => void;
+  confirmDisabled: boolean;
+  confirmHint?: string;
 }) {
   const [view, setView] = useState<"compact" | "board">("compact");
   if (!run) return null;
@@ -482,16 +474,17 @@ function SessionRail({
           {current === "awaiting_prd_confirm" && (
             <>
               <span className="text-xs" style={{ color: "var(--color-muted)" }}>PRD 待确认</span>
-              <button className="rounded-full px-3 py-1 text-xs text-[#0a0b0e]" style={{ background: "var(--gradient-brand)" }} onClick={onConfirm}>
+              <button className="rounded-full px-3 py-1 text-xs text-[#0a0b0e] disabled:opacity-40" style={{ background: "var(--gradient-brand)" }} onClick={onConfirm} disabled={confirmDisabled}>
                 确认 PRD
               </button>
+              {confirmHint && <span className="text-xs" style={{ color: "var(--color-muted)" }}>{confirmHint}</span>}
             </>
           )}
           {current === "awaiting_acceptance" && (
             <>
               <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full" style={{ background: "var(--warn)" }} />
               <span className="text-xs font-medium" style={{ color: "var(--warn)" }}>
-                待验收：请在下方对话区勾选验收清单，点「验收通过，交付」
+                待验收：在任务验证卡片中记录结果，全部通过后确认交付。
               </span>
             </>
           )}
@@ -501,22 +494,39 @@ function SessionRail({
   );
 }
 
+type OutputKind = "prd" | "code" | "deploy" | "decisions";
+type OutputFocus = { runId: string; sequence: number; kind: OutputKind };
+
 /* ---------- 预览栏：产物 + 本地运行 ---------- */
+function InternalExecutionDetails({ run, onResume }: { run: Run; onResume: () => Promise<void> }) {
+  const [expanded, setExpanded] = useState(false);
+  return <details className="rounded-xl border border-line bg-panel" onToggle={(event) => setExpanded(event.currentTarget.open)}>
+    <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-muted">内部执行记录</summary>
+    {expanded && <div className="border-t border-line p-3"><ExecutionPanel runId={run.id} currentStage={run.current_stage} executionMode={run.execution_mode} onResume={onResume} /></div>}
+  </details>;
+}
+
 function PreviewPanel({
   run,
   metrics,
   role,
   onPreview,
   onRunRefresh,
+  onResume,
+  focusRequest,
 }: {
   run: ReturnType<typeof useFactoryRun>["run"];
   metrics: Metrics | null;
   role: ViewRole;
   onPreview: () => void | Promise<void>;
   onRunRefresh: () => Promise<void>;
+  onResume: () => Promise<void>;
+  focusRequest: OutputFocus | null;
 }) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [selected, setSelected] = useState<Artifact | null>(null);
+  const artifactRevision = useRef<{ runId: string; revision: number } | null>(null);
+  const appliedFocus = useRef<number | null>(null);
   const visibleArtifacts = filterArtifactsForRole(artifacts, role);
   const [workspace, setWorkspace] = useState("");
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -526,7 +536,7 @@ function PreviewPanel({
   const [writeConfirmOpen, setWriteConfirmOpen] = useState(false);
   const [writeAlways, setWriteAlways] = useState(false);
   type PreviewTab = "run" | "decisions" | "artifacts" | "quality";
-  const [tab, setTab] = useState<PreviewTab>("run");
+  const [tab, setTab] = useState<PreviewTab>("artifacts");
   const [compareBusy, setCompareBusy] = useState(false);
   const [compareErr, setCompareErr] = useState<string | null>(null);
   const [compareVariants, setCompareVariants] = useState<ComparePrdVariant[]>([]);
@@ -539,8 +549,19 @@ function PreviewPanel({
     listArtifacts(runId)
       .then((items) => {
         if (cancelled) return;
-        setArtifacts(items);
-        setSelected((prev) => items.find((a) => a.id === prev?.id) || items[0] || null);
+        const revision = run?.prd_revision ?? 0;
+        const changed = artifactRevision.current?.runId !== runId || artifactRevision.current.revision !== revision;
+        const sorted = [...items].sort((a, b) => b.id - a.id);
+        setArtifacts(sorted);
+        const focus = focusRequest?.runId === runId && focusRequest.sequence !== appliedFocus.current ? focusRequest : null;
+        const visible = filterArtifactsForRole(sorted, role);
+        const requested = focus ? visible.find((item) => item.kind === focus.kind) : null;
+        setSelected((prev) => requested || selectArtifactAfterRefresh(visible, prev?.id ?? null, changed));
+        artifactRevision.current = { runId, revision };
+        if (focus && (requested || focus.kind === "decisions")) {
+          setTab(focus.kind === "decisions" ? "decisions" : "artifacts");
+          appliedFocus.current = focus.sequence;
+        } else if (changed && sorted.some((item) => item.kind === "prd")) setTab("artifacts");
       })
       .catch(() => {
         if (!cancelled) setArtifacts([]);
@@ -548,7 +569,7 @@ function PreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [runId, run?.current_stage, run?.evidence?.length]);
+  }, [runId, run?.current_stage, run?.evidence?.length, run?.prd_revision, role, focusRequest]);
 
   useEffect(() => {
     if (!runId) {
@@ -591,13 +612,6 @@ function PreviewPanel({
       return visible[0] || null;
     });
   }, [artifacts, role]);
-
-  // 默认页签：切换 Run 时有产物优先「产物」，否则「运行」；产物首次到达且仍在「运行」则切到「产物」
-  useEffect(() => {
-    const has = filterArtifactsForRole(artifacts, role).length > 0;
-    setTab(has ? "artifacts" : "run");
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅随 Run 切换重置默认
-  }, [runId]);
 
   useEffect(() => {
     if (filterArtifactsForRole(artifacts, role).length > 0) {
@@ -744,28 +758,28 @@ function PreviewPanel({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b px-4 pt-3" style={{ borderColor: "var(--color-line)" }}>
-        <div className="mb-2 text-sm font-semibold">预览</div>
+        <div className="mb-3 flex items-center justify-between text-xs"><span className="font-semibold">成果区</span><span className="text-[10px] text-muted">需求、代码与运行</span></div>
         <div className="flex flex-wrap gap-1 pb-2">
           {(
             [
+              { id: "artifacts" as const, label: "产物" },
               { id: "run" as const, label: "运行" },
               { id: "decisions" as const, label: "决策" },
-              { id: "artifacts" as const, label: "产物" },
               ...(role === "dev" ? [{ id: "quality" as const, label: "质量" }] : []),
             ]
           ).map((t) => (
             <button
               key={t.id}
               className={cn(
-                "rounded-full px-3 py-1 text-xs",
-                tab === t.id ? "text-[#0a0b0e]" : "border",
+                "rounded-md px-3 py-1.5 text-xs",
+                tab === t.id ? "font-medium" : "",
               )}
               style={
                 tab === t.id
-                  ? { background: "var(--gradient-brand)" }
+                  ? { background: "var(--brand-soft)", color: "var(--brand)" }
                   : { borderColor: "var(--color-line)", color: "var(--color-muted)" }
               }
-              onClick={() => setTab(t.id)}
+              onClick={() => { if (focusRequest) appliedFocus.current = focusRequest.sequence; setTab(t.id); }}
             >
               {t.label}
             </button>
@@ -773,7 +787,7 @@ function PreviewPanel({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto p-4">
+      <div className="workspace-scroll flex-1 min-h-0 overflow-auto p-4">
         {tab === "run" && (
           <div className="space-y-4">
             <section>
@@ -905,7 +919,8 @@ function PreviewPanel({
         )}
 
         {tab === "decisions" && (
-          <section>
+          <section className="space-y-4">
+            {(run?.change_request || run?.requirement_feedback?.length) && <div><h3 className="mb-2 text-xs font-medium text-muted">需求变更</h3><ul className="space-y-2">{[...new Set([run?.change_request, ...(run?.requirement_feedback || []).map((item) => item.feedback)].filter((text): text is string => Boolean(text)))].map((text) => <li key={text} className="rounded-xl border border-line bg-background px-3 py-2 text-xs leading-6">{text}</li>)}</ul></div>}
             <div className="mb-2 text-xs font-medium" style={{ color: "var(--color-muted)" }}>决策台账</div>
             {(() => {
               const ledger = summarizeDecisionLedger(run?.decisions);
@@ -956,13 +971,13 @@ function PreviewPanel({
         )}
 
         {tab === "artifacts" && (
-          <section className="min-h-0">
+          <section className="min-h-0 min-w-0">
             <div className="mb-2 text-xs font-medium" style={{ color: "var(--color-muted)" }}>产物</div>
             {!run || visibleArtifacts.length === 0 ? (
-              <div className="text-sm" style={{ color: "var(--color-muted)" }}>
-                {!run || artifacts.length === 0
-                  ? "暂无产物"
-                  : "当前视图无可预览产物（代码与闸门证据仅开发者可见）"}
+              <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-line px-6 py-12 text-center text-muted">
+                <FolderOpen size={27} strokeWidth={1.3} />
+                <p className="text-sm font-medium">{artifacts.length === 0 ? "你的成果会出现在这里" : "当前视角暂无可查看产物"}</p>
+                <p className="max-w-[260px] text-xs leading-6">{artifacts.length === 0 ? "先在对话区确定需求，生成的文档、代码和说明会集中放在这里。" : "切换开发视角可查看代码与检查记录。"}</p>
               </div>
             ) : (
               <div className="space-y-2">
@@ -972,9 +987,9 @@ function PreviewPanel({
                       key={a.id}
                       className={cn("rounded-full border px-2 py-0.5 text-xs", selected?.id === a.id ? "bg-brand-soft" : "")}
                       style={{ borderColor: "var(--color-line)" }}
-                      onClick={() => setSelected(a)}
+                      onClick={() => { if (focusRequest) appliedFocus.current = focusRequest.sequence; setSelected(a); }}
                     >
-                      {a.title}
+                      {a.kind === "prd" ? `${a.id === visibleArtifacts.find((item) => item.kind === "prd")?.id ? "最新 PRD" : "历史 PRD"} · 第 ${visibleArtifacts.filter((item) => item.kind === "prd" && item.id <= a.id).length} 稿` : a.title}
                     </button>
                   ))}
                 </div>
@@ -986,14 +1001,15 @@ function PreviewPanel({
                 {selected && (
                   selected.kind === "prd" || selected.kind === "deploy" || selected.kind === "readme" ? (
                     <div
-                      className="prose prose-sm prose-invert max-h-[60vh] max-w-none overflow-auto rounded-xl border p-3 text-xs leading-relaxed"
+                      className="prose-product max-h-[60vh] max-w-none overflow-x-hidden overflow-y-auto rounded-xl border p-3 text-xs leading-relaxed"
                       style={{ borderColor: "var(--color-line)", background: "var(--color-bg)" }}
                     >
-                      <ReactMarkdown>{(selected.content || "加载中…").slice(0, 5000)}</ReactMarkdown>
+                      {selected.kind === "prd" && <p className="text-xs font-medium" style={{ color: selected.id === visibleArtifacts.find((item) => item.kind === "prd")?.id ? "var(--ok)" : "var(--warn)" }}>{selected.id === visibleArtifacts.find((item) => item.kind === "prd")?.id ? "当前最新 PRD，用于本次确认。" : "正在查看历史稿。本次确认以最新 PRD 为准。"}</p>}
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={productMarkdownComponents}>{selected.content || "加载中…"}</ReactMarkdown>
                     </div>
                   ) : (
-                    <pre className="max-h-[60vh] overflow-auto rounded-lg p-3 text-[11px] leading-relaxed" style={{ background: "#0d0f13", color: "#c3ccd8", whiteSpace: "pre-wrap" }}>
-                      {(selected.content || "加载中…").slice(0, 5000)}
+                    <pre className="max-h-[60vh] overflow-auto rounded-lg border border-line p-3 text-[11px] leading-relaxed" style={{ background: "var(--paper-2)", color: "var(--ink)", whiteSpace: "pre-wrap" }}>
+                      {selected.content || "加载中…"}
                     </pre>
                   )
                 )}
@@ -1004,6 +1020,7 @@ function PreviewPanel({
 
         {tab === "quality" && role === "dev" && (
           <section className="space-y-3">
+            {run?.execution_mode === "agent_team" && <InternalExecutionDetails run={run} onResume={onResume} />}
             <div>
               <div className="mb-2 text-xs font-medium" style={{ color: "var(--color-muted)" }}>本 Run 模型</div>
               <div className="rounded-lg p-2.5 text-sm" style={{ background: "var(--color-bg)" }}>
@@ -1036,7 +1053,13 @@ function PreviewPanel({
                   setCompareBusy(true);
                   setCompareErr(null);
                   try {
-                    const r = await comparePrd(run.idea);
+                    const r = await comparePrd(run.idea, run.decisions.map((decision) => ({
+                      code: decision.code,
+                      question: decision.question,
+                      options: decision.options,
+                      recommendation: decision.recommendation,
+                      answer: decision.answer ?? "",
+                    })));
                     setCompareVariants(r.variants);
                   } catch (e) {
                     setCompareErr((e as Error).message);
@@ -1137,15 +1160,15 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: (phone: string) => void }) {
 
   const inputStyle = { borderColor: "var(--color-line)", background: "var(--color-bg)" };
   return (
-    <div className="flex h-dvh items-center justify-center px-4" style={{ background: "var(--color-bg)" }}>
+    <div className="login-screen flex h-dvh items-center justify-center px-4" style={{ background: "var(--color-bg)" }}>
       <div className="w-full max-w-sm rounded-2xl border p-6" style={{ borderColor: "var(--color-line)", background: "var(--color-surface)" }}>
-        <div className="text-3xl">🏭</div>
-        <div className="mt-2 text-lg font-semibold">登录 Agent造物坊</div>
-        <div className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>手机号验证码登录（本地模式验证码会直接显示）</div>
+        <div className="factory-logo"><Layers3 size={22} /></div>
+        <div className="mt-5 text-xl font-semibold tracking-tight">欢迎来到 Agent 造物坊</div>
+        <div className="mt-2 text-sm leading-6 text-muted">从想法到可用的第一版。登录后继续你的项目。</div>
         <div className="mt-4 flex gap-2">
           <input
             ref={phoneRef}
-            className="flex-1 rounded-full border px-4 py-2.5 text-sm outline-none"
+            className="input-field min-w-0 flex-1"
             style={inputStyle}
             placeholder="手机号"
             name="phone"
@@ -1156,7 +1179,7 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: (phone: string) => void }) {
             onInput={(e) => setPhone((e.target as HTMLInputElement).value)}
             onKeyDown={(e) => e.key === "Enter" && handleRequestCode()}
           />
-          <button className="rounded-full px-4 py-2.5 text-sm text-[#0a0b0e]" style={{ background: "var(--gradient-brand)" }} onClick={handleRequestCode} disabled={busy}>
+          <button className="button-primary shrink-0" onClick={handleRequestCode} disabled={busy}>
             获取验证码
           </button>
         </div>
@@ -1164,7 +1187,7 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: (phone: string) => void }) {
           <div className="mt-3 flex gap-2">
             <input
               ref={codeRef}
-              className="flex-1 rounded-full border px-4 py-2.5 text-sm outline-none"
+              className="input-field min-w-0 flex-1"
               style={inputStyle}
               placeholder="验证码"
               name="code"
@@ -1174,30 +1197,79 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: (phone: string) => void }) {
               onInput={(e) => setCode((e.target as HTMLInputElement).value)}
               onKeyDown={(e) => e.key === "Enter" && handleLogin()}
             />
-            <button className="rounded-full px-4 py-2.5 text-sm text-[#0a0b0e]" style={{ background: "var(--gradient-brand)" }} onClick={handleLogin} disabled={busy}>
+            <button className="button-primary" onClick={handleLogin} disabled={busy}>
               登录
             </button>
           </div>
         )}
-        {err && <div className="mt-3 text-xs" style={{ color: "var(--color-danger)" }}>⚠️ {err}</div>}
+        {err && <div role="alert" className="mt-3 text-xs" style={{ color: "var(--color-danger)" }}>{err}</div>}
+        <p className="mt-4 text-[11px] leading-5 text-muted">使用手机号验证码登录。本地模式下，验证码会自动填入。</p>
       </div>
     </div>
   );
 }
 
 export default function Page() {
-  const { run, submit, answer, confirm, restore, cancel, retry, retest, isTerminal, failure, reset } = useFactoryRun();
+  const { run, submit, answer, confirm, restore, cancel, retry, retest, isTerminal, failure, reset, requirements, saveScenarios, saveResults, revise } = useFactoryRun();
   const [idea, setIdea] = useState("");
   const [llmProvider, setLlmProvider] = useState<string>("");
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("agent_team");
+  const [workspaceView, setWorkspaceView] = useState<"work" | "review">("work");
   const [llmProfiles, setLlmProfiles] = useState<LlmProfile[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [runList, setRunList] = useState<RunSummary[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [deletedProjects, setDeletedProjects] = useState<Project[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [projectNotice, setProjectNotice] = useState<string | null>(null);
+  const listRequest = useRef(0);
+  const [syncStatus, setSyncStatus] = useState("正在同步项目…");
+  const autoRunIds = useRef<Set<string> | null>(null);
+  const [scheduleNotice, setScheduleNotice] = useState<{ id: string; idea: string } | null>(null);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [role, setRole] = useState<ViewRole>("pm");
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [outputFocus, setOutputFocus] = useState<OutputFocus | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [reviewTab, setReviewTab] = useState<"requirements" | "scenarios">("requirements");
   const [execConfirmOpen, setExecConfirmOpen] = useState(false);
   const [execAlways, setExecAlways] = useState(false);
   const [execBusy, setExecBusy] = useState(false);
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const actionPending = useRef(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [scenarioDraft, setScenarioDraft] = useState<{ runId: string; items: AcceptanceScenario[] } | null>(null);
+  const [revisionDraft, setRevisionDraft] = useState<{ runId: string; text: string; key: string } | null>(null);
+  useEffect(() => {
+    if (!revisionDraft || revisionDraft.runId !== run?.id) return;
+    const field = document.querySelector<HTMLTextAreaElement>("#revision-form textarea");
+    field?.scrollIntoView({ behavior: "smooth", block: "center" });
+    field?.focus({ preventScroll: true });
+  }, [revisionDraft, run?.id]);
+  const scenarios = useMemo(() => {
+    if (run && scenarioDraft?.runId === run.id) return scenarioDraft.items;
+    if (run?.acceptance_scenarios?.length) return run.acceptance_scenarios;
+    return [1, 2, 3].map((n) => ({ id: `scenario-${n}`, title: "", input: "", expected_output: "" }));
+  }, [run, scenarioDraft]);
+  const scenarioDirty = JSON.stringify(scenarios) !== JSON.stringify(run?.acceptance_scenarios || []);
+  const scenarioIssue = run?.acceptance_mode === "scenario" ? acceptanceScenarioError(scenarios) : null;
+  const confirmHint = run?.acceptance_mode === "scenario"
+    ? scenarioIssue || (scenarioDirty ? "请先保存验收场景中的修改。" : undefined)
+    : undefined;
+
+  async function withMutation(label: string, operation: () => Promise<void>) {
+    if (actionPending.current) throw new Error("正在处理上一步，请稍后再试。");
+    actionPending.current = true;
+    setActionBusy(label);
+    setActionError(null);
+    try { await operation(); }
+    finally { actionPending.current = false; setActionBusy(null); }
+  }
+
+  function showActionError(error: unknown) {
+    setActionError(error instanceof Error ? error.message : "操作未完成，请重试。");
+  }
 
   useEffect(() => {
     try {
@@ -1216,8 +1288,8 @@ export default function Page() {
       /* ignore */
     }
   }
-  const [leftWidth, setLeftWidth] = useState(220);
-  const [rightWidth, setRightWidth] = useState(320);
+  const [leftWidth, setLeftWidth] = useState(224);
+  const [rightWidth, setRightWidth] = useState(520);
   const [phone, setPhone] = useState<string | null>(null);
   // 首屏固定 checking，避免 SSR(无 localStorage) 与客户端(有 token) 首帧不一致导致 hydration Issue
   const [authPhase, setAuthPhase] = useState<"guest" | "checking" | "authed">("checking");
@@ -1230,8 +1302,8 @@ export default function Page() {
       const setW = side === "left" ? setLeftWidth : setRightWidth;
       const onMove = (ev: MouseEvent) => {
         const delta = side === "right" ? startX - ev.clientX : ev.clientX - startX;
-        const min = side === "left" ? 180 : 260;
-        const max = side === "left" ? 300 : 440;
+        const min = side === "left" ? 180 : 340;
+        const max = side === "left" ? 300 : Math.max(340, Math.min(860, window.innerWidth - leftWidth - 420));
         setW(Math.max(min, Math.min(max, startW + delta)));
       };
       const onUp = () => {
@@ -1243,18 +1315,102 @@ export default function Page() {
     };
   }
 
-  const messages = useMemo(() => deriveMessages(run, role), [run, role]);
+  const pendingQuestions = run?.decisions.filter((decision) => decision.status !== "answered") || [];
+  const questionCount = run?.decisions.filter((decision) => decision.is_critical || decision.status !== "answered").length || 0;
+  const currentQuestion = pendingQuestions[0];
 
-  const loadAll = () => {
-    getMetrics().then(setMetrics).catch(() => {});
-    getRunList().then((d) => setRunList(d.runs)).catch(() => {});
-    listProjects().then((d) => setProjects(d.projects)).catch(() => {});
-    listSchedules().then(setSchedules).catch(() => {});
-  };
+  function openOutput(kind: OutputKind) {
+    if (!run) return;
+    setOutputFocus({ runId: run.id, sequence: Date.now(), kind });
+    if (!window.matchMedia("(min-width: 1280px)").matches) setInspectorOpen(true);
+  }
+
+  const loadNavigation = useCallback(async (signal?: AbortSignal) => {
+    const request = ++listRequest.current;
+    const current = () => !signal?.aborted && request === listRequest.current;
+    const results = await Promise.allSettled([
+      getRunList(signal).then((data) => {
+        if (!current()) return;
+        const scheduled = data.runs.filter((item) => item.auto_schedule_id);
+        const latest = autoRunIds.current && scheduled.find((item) => !autoRunIds.current!.has(item.id));
+        autoRunIds.current = new Set(scheduled.map((item) => item.id));
+        setScheduleNotice((notice) => latest ? { id: latest.id, idea: latest.idea } : notice && data.runs.some((item) => item.id === notice.id) ? notice : null);
+        setRunList(data.runs);
+      }),
+      listProjects(false, signal).then((data) => { if (current()) setProjects(data.projects); }),
+      listProjects(true, signal).then((data) => { if (current()) setDeletedProjects(data.projects); }),
+      listSchedules(signal).then((data) => { if (current()) setSchedules(data); }),
+    ]);
+    if (!current()) return;
+    if (results.some((result) => result.status === "rejected")) {
+      setSyncStatus("项目同步暂时中断，正在重试…");
+    } else {
+      setSyncStatus(`自动更新 · ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`);
+    }
+  }, []);
+
+  const loadAll = useCallback(() => {
+    // 复盘统计不应阻塞新项目发现。
+    void loadNavigation();
+    const request = listRequest.current;
+    getMetrics().then((data) => { if (request === listRequest.current) setMetrics(data); }).catch(() => {});
+  }, [loadNavigation]);
+
+  function requestProjectDelete(id: string) {
+    if (actionPending.current) return;
+    const project = projects.find((item) => item.id === id);
+    if (!project) return;
+    setDeleteError(null);
+    setDeleteTarget(project);
+  }
+
+  async function handleProjectDelete() {
+    if (!deleteTarget || actionPending.current) return;
+    const project = deleteTarget;
+    setDeleteError(null);
+    try {
+      await withMutation("delete-project", async () => {
+        await deleteProject(project.id);
+        ++listRequest.current;
+        setProjects((items) => items.filter((item) => item.id !== project.id));
+        setRunList((items) => items.filter((item) => item.project_id !== project.id));
+        setDeletedProjects((items) => [project, ...items.filter((item) => item.id !== project.id)]);
+        setSchedules((items) => items.map((item) => item.project_id === project.id ? { ...item, enabled: false } : item));
+        if (run?.project_id === project.id) {
+          reset();
+          setScenarioDraft(null);
+          setRevisionDraft(null);
+          setInspectorOpen(false);
+          setWorkspaceView("work");
+          setReviewTab("requirements");
+        }
+        setDeleteTarget(null);
+        setProjectNotice("项目已移入回收站，可在左侧回收站恢复。");
+        loadAll();
+      });
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "删除未完成，请重试。");
+    }
+  }
+
+  async function handleProjectRestore(id: string) {
+    if (actionPending.current) return;
+    try {
+      await withMutation("restore-project", async () => {
+        const project = await restoreProject(id);
+        ++listRequest.current;
+        setDeletedProjects((items) => items.filter((item) => item.id !== id));
+        setProjects((items) => [project, ...items.filter((item) => item.id !== id)]);
+        setProjectNotice("项目已恢复，关联的定时任务保持暂停。");
+        loadAll();
+      });
+    } catch (error) { showActionError(error); }
+  }
 
   async function handleCreateSchedule(idea: string, triggerTime: string) {
-    await createSchedule({ idea, trigger_time: triggerTime });
-    listSchedules().then(setSchedules).catch(() => {});
+    const schedule = await createSchedule({ idea, trigger_time: triggerTime });
+    ++listRequest.current;
+    setSchedules((items) => [schedule, ...items.filter((item) => item.id !== schedule.id)]);
   }
 
   async function handleToggleSchedule(s: Schedule) {
@@ -1306,41 +1462,119 @@ export default function Page() {
     }
   }, [run?.current_stage]);
 
-  // 定时无人值守：每 30s 刷新任务列表与定时任务，自动生成的新 Run 自动出现
+  // 前台每 5 秒同步，切回页面立即同步；慢请求不叠加，也不改变当前选中的项目。
   useEffect(() => {
     if (authPhase !== "authed") return;
-    const timer = setInterval(() => {
-      getRunList().then((d) => setRunList(d.runs)).catch(() => {});
-      listSchedules().then(setSchedules).catch(() => {});
-    }, 30000);
-    return () => clearInterval(timer);
-  }, [authPhase]);
+    const loop = startWorkspaceSync({
+      refresh: loadNavigation,
+      isVisible: () => document.visibilityState === "visible",
+      onError: () => setSyncStatus("项目同步暂时中断，正在重试…"),
+    });
+    const metricsLoop = startWorkspaceSync({
+      refresh: async (signal) => {
+        const data = await getMetrics(signal);
+        if (!signal.aborted) setMetrics(data);
+      },
+      isVisible: () => document.visibilityState === "visible",
+      onError: () => {},
+      intervalMs: 30000,
+    });
+    window.addEventListener("focus", loop.sync);
+    window.addEventListener("online", loop.sync);
+    document.addEventListener("visibilitychange", loop.sync);
+    return () => {
+      loop.stop();
+      metricsLoop.stop();
+      window.removeEventListener("focus", loop.sync);
+      window.removeEventListener("online", loop.sync);
+      document.removeEventListener("visibilitychange", loop.sync);
+      ++listRequest.current;
+    };
+  }, [authPhase, loadNavigation]);
 
   async function handleSend() {
     const text = idea.trim();
-    if (!text) return;
-    setIdea("");
-    await submit(text, llmProvider ? { llm_provider: llmProvider } : undefined);
-    loadAll();
+    if (!text || actionPending.current) return;
+    try {
+      await withMutation("submit", async () => {
+        await submit(text, { llm_provider: llmProvider || undefined, execution_mode: executionMode });
+        setIdea("");
+        setScenarioDraft(null);
+        setRevisionDraft(null);
+        loadAll();
+      });
+    } catch (error) { showActionError(error); }
   }
 
-  async function handleAnswer(code: string, value: string) {
-    await answer(code, value);
+  async function handleAnswer(code: string, value: string): Promise<boolean> {
+    try {
+      await withMutation("answer", async () => { await answer(code, value); setScenarioDraft(null); });
+      return true;
+    } catch (error) { showActionError(error); return false; }
   }
 
   async function handleConfirm() {
-    await confirm();
+    if (confirmHint) { setActionError(confirmHint); return; }
+    try { await withMutation("confirm", confirm); }
+    catch (error) { showActionError(error); }
   }
 
-  async function handleAccept(checklist: { id: string; label: string; passed: boolean }[]) {
+  async function handleResume() {
     if (!run) return;
-    try {
-      await acceptRun(run.id, checklist);
+    await withMutation("resume", async () => {
+      await resumeExecution(run.id);
+      await restore(run.id);
+    });
+  }
+
+  async function handleAccept(checklist: AcceptanceChecklistItem[], results: AcceptanceScenarioResult[] = []) {
+    if (!run) return;
+    await withMutation("accept", async () => {
+      await acceptRun(run.id, checklist, "验收通过", results);
       await restore(run.id);
       loadAll();
-    } catch (e) {
-      alert((e as Error).message);
-    }
+    });
+  }
+
+  async function handleRequirements(feedback: string) {
+    await withMutation("requirements", async () => { await requirements(feedback); setScenarioDraft(null); });
+  }
+
+  async function handleSaveScenarios() {
+    await withMutation("scenarios", async () => { await saveScenarios(scenarios); setScenarioDraft(null); });
+  }
+
+  async function handleSaveResults(results: AcceptanceScenarioResult[]) {
+    await withMutation("results", async () => { await saveResults(results); });
+  }
+
+  async function handleRequestRevision(results: AcceptanceScenarioResult[]) {
+    if (!run) return;
+    await withMutation("results", async () => {
+      await saveResults(results);
+      setRevisionDraft({ runId: run.id, text: buildFailureRevisionDraft(run.acceptance_scenarios || [], results), key: crypto.randomUUID() });
+    });
+  }
+
+  async function handleReject(note: string) {
+    if (!run) return;
+    await withMutation("results", async () => {
+      await rejectRun(run.id, note);
+      await restore(run.id);
+      const prefix = "请保留已有功能，修复人工验收未通过的问题（完整原因已保存到父版本）：\n\n";
+      const limit = 4000 - prefix.length;
+      const summary = note.length <= limit ? note : `${note.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
+      setRevisionDraft({ runId: run.id, text: prefix + summary, key: crypto.randomUUID() });
+    });
+  }
+
+  async function handleRevise(changeRequest: string, requestId: string) {
+    await withMutation("revise", async () => {
+      await revise(changeRequest, requestId);
+      setScenarioDraft(null);
+      setRevisionDraft(null);
+      loadAll();
+    });
   }
 
   async function doStartPreview() {
@@ -1386,7 +1620,35 @@ export default function Page() {
   }
 
   async function handleSelect(id: string) {
-    await restore(id);
+    if (actionPending.current) return;
+    try {
+      await withMutation("navigate", async () => {
+        await restore(id);
+        setScheduleNotice((notice) => notice?.id === id ? null : notice);
+        setSidebarOpen(false);
+        setReviewTab("requirements");
+        setWorkspaceView("work");
+      });
+    } catch (error) { showActionError(error); }
+  }
+
+  function handleNew() {
+    if (actionPending.current) return;
+    reset();
+    setScenarioDraft(null);
+    setRevisionDraft(null);
+    setActionError(null);
+    setInspectorOpen(false);
+    setSidebarOpen(false);
+    setReviewTab("requirements");
+    setWorkspaceView("work");
+  }
+
+  function handleShowReview() {
+    if (actionPending.current) return;
+    setWorkspaceView("review");
+    setSidebarOpen(false);
+    setInspectorOpen(false);
   }
 
   async function handleLoggedIn(p: string) {
@@ -1404,11 +1666,19 @@ export default function Page() {
   }
 
   function handleLogout() {
+    ++listRequest.current;
+    autoRunIds.current = null;
+    setScheduleNotice(null);
+    setSyncStatus("正在同步项目…");
     clearToken();
     reset();
     setPhone(null);
     setAuthPhase("guest");
     setRunList([]);
+    setProjects([]);
+    setDeletedProjects([]);
+    setDeleteTarget(null);
+    setProjectNotice(null);
     setMetrics(null);
   }
 
@@ -1420,35 +1690,44 @@ export default function Page() {
   }
 
   return (
-    <div className="flex h-dvh">
+    <div className="workspace-shell flex h-dvh overflow-hidden">
       {/* 左栏 */}
-      <aside className="hidden shrink-0 border-r md:block" style={{ width: leftWidth, borderColor: "var(--color-line)", background: "var(--color-surface)" }}>
-        <TaskList runs={runList} currentId={run?.id ?? null} onSelect={handleSelect} role={role} onRoleChange={handleRoleChange} projectCount={projects.length} schedules={schedules} onCreateSchedule={handleCreateSchedule} onToggleSchedule={handleToggleSchedule} onDeleteSchedule={handleDeleteSchedule} />
+      {sidebarOpen && <button aria-label="关闭项目导航" className="fixed inset-0 z-40 bg-black/20 md:hidden" onClick={() => setSidebarOpen(false)} />}
+      <aside className={cn("workspace-sidebar min-h-0 shrink-0 flex-col overflow-hidden border-r md:relative md:flex", sidebarOpen ? "fixed inset-y-0 left-0 z-50 flex shadow-xl" : "hidden")} style={{ width: leftWidth, borderColor: "var(--color-line)" }}>
+        <TaskList runs={runList} currentId={workspaceView === "work" ? run?.id ?? null : null} currentProjectId={workspaceView === "work" ? run?.project_id ?? null : null} onSelect={handleSelect} onNew={handleNew} busy={!!actionBusy} onReview={handleShowReview} reviewActive={workspaceView === "review"} role={role} onRoleChange={handleRoleChange} projects={projects} deletedProjects={deletedProjects} onDeleteProject={requestProjectDelete} onRestoreProject={(id) => { void handleProjectRestore(id); }} schedules={schedules} onCreateSchedule={handleCreateSchedule} onToggleSchedule={handleToggleSchedule} onDeleteSchedule={handleDeleteSchedule} syncStatus={syncStatus} scheduleNotice={scheduleNotice} />
         {phone && (
-          <div className="border-t p-3 text-sm" style={{ borderColor: "var(--color-line)" }}>
+          <div className="shrink-0 border-t px-4 py-4 text-xs" style={{ borderColor: "var(--color-line)" }}>
             <div className="flex items-center justify-between gap-2">
-              <span className="min-w-0 truncate" style={{ color: "var(--color-muted)" }}>{phone}</span>
-              <button className="shrink-0 text-xs transition hover:underline" style={{ color: "var(--color-muted)" }} onClick={handleLogout}>退出</button>
+              <span className="flex min-w-0 items-center gap-2" style={{ color: "var(--color-muted)" }}><span className="flex h-7 w-7 items-center justify-center rounded-full border border-line bg-panel text-[10px] font-medium text-ink">我</span>{phone.replace(/^(\d{3})\d{4}/, "$1****")}</span>
+              <button aria-label="退出登录" className="shrink-0 text-xs text-muted" onClick={handleLogout}><LogOut size={14} /></button>
             </div>
           </div>
         )}
       </aside>
 
       {/* 左分隔条（拖动调宽） */}
-      <div className="hidden w-1 shrink-0 cursor-col-resize transition hover:bg-black/5 md:block" style={{ background: "var(--color-line)" }} onMouseDown={startDrag("left")} />
+      <div className="hidden w-px shrink-0 cursor-col-resize hover:bg-brand md:block" onMouseDown={startDrag("left")} />
 
       {/* 中栏：会话 + 内嵌编排 */}
-      <main className="flex min-w-0 flex-1 flex-col" style={{ background: "var(--color-bg)" }}>
-        <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4 text-sm font-semibold" style={{ borderColor: "var(--color-line)", background: "var(--color-surface)" }}>
-          <span className="min-w-0 flex-1 truncate">{run ? run.idea : "新想法"}</span>
-          {run && !isTerminal && (
-            <button className="rounded-full border px-3 py-1 text-xs font-normal transition hover:bg-black/5" style={{ borderColor: "var(--color-line)", color: "var(--color-muted)" }} onClick={() => cancel()}>
-              取消
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" style={{ background: "var(--color-bg)" }}>
+        <div className="workspace-topbar flex min-h-[60px] shrink-0 items-center gap-3 border-b border-line px-5 md:px-7">
+          <button className="text-muted md:hidden" aria-label="打开项目导航" onClick={() => setSidebarOpen(true)}><Menu size={17} /></button>
+          <button disabled={!!actionBusy} onClick={handleNew} className="flex shrink-0 items-center gap-2 text-xs text-muted">工作台</button>
+          <ChevronRight size={13} className="shrink-0 text-muted" />
+          <span className="min-w-0 flex-1 truncate text-xs font-medium">{workspaceView === "review" ? "项目复盘" : run ? run.idea.split("\n")[0] : "创建项目"}</span>
+          {!run && <span className="status-badge hidden sm:inline-flex"><span className="h-1.5 w-1.5 rounded-full bg-ok" />本地工作空间</span>}
+          {workspaceView === "work" && run && <button aria-label="打开成果区" className="flex shrink-0 items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-xs xl:hidden" onClick={() => setInspectorOpen(true)}><PanelRight size={14} /><span className="hidden sm:inline">成果区</span></button>}
+          {workspaceView === "work" && run && !isTerminal && (
+            <button className="text-xs text-muted disabled:opacity-40" disabled={!!actionBusy} onClick={() => { void withMutation("cancel", cancel).catch(showActionError); }}>
+              停止
             </button>
           )}
         </div>
-        <SessionRail run={run} role={role} onConfirm={handleConfirm} onAccept={handleAccept} />
-        {(failure || (run && (run.current_stage === "failed" || run.current_stage === "gate_failed" || run.current_stage === "cancelled"))) && (
+        {workspaceView === "work" && run && <ProjectVersionPicker run={run} runs={runList} busy={!!actionBusy} role={role} onSelect={handleSelect} />}
+        {workspaceView === "work" && run && <WorkflowProgress run={run} />}
+        {projectNotice && <div role="status" className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-brand-soft px-4 py-2 text-xs text-brand"><span>{projectNotice}</span><button aria-label="关闭项目操作提示" className="flex h-6 w-6 shrink-0 items-center justify-center" onClick={() => setProjectNotice(null)}><X size={13} /></button></div>}
+        {actionError && <div role="alert" className="border-b px-4 py-2 text-xs" style={{ color: "var(--danger)", background: "var(--danger-soft)", borderColor: "var(--color-line)" }}>{actionError}</div>}
+        {workspaceView === "work" && (failure || (run && (run.current_stage === "failed" || run.current_stage === "gate_failed" || run.current_stage === "cancelled"))) && (
           <div className="flex shrink-0 items-start gap-3 border-b px-4 py-2 text-xs" style={{ background: "var(--danger-soft)", color: "var(--danger)", borderColor: "var(--color-line)" }}>
             <div className="min-w-0 flex-1">
               {role === "dev" ? (
@@ -1467,8 +1746,8 @@ export default function Page() {
                 <div>⚠️ 已取消</div>
               ) : (
                 <>
-                  <div>⚠️ {pmFailureText(run?.failure_code).message}</div>
-                  <div className="mt-0.5 opacity-80">{pmFailureText(run?.failure_code).suggestion}</div>
+                  <div>⚠️ {pmFailureText(run?.failure_code, run?.failure_reason).message}</div>
+                  <div className="mt-0.5 opacity-80">{pmFailureText(run?.failure_code, run?.failure_reason).suggestion}</div>
                 </>
               )}
             </div>
@@ -1477,16 +1756,18 @@ export default function Page() {
                 {canRetestInPlace(run.current_stage) && (
                   <button
                     className="rounded-full px-3 py-1 text-xs font-medium text-white transition"
-                    style={{ background: "#ef4444" }}
-                    onClick={() => retest().catch(() => {})}
+                    style={{ background: "var(--danger)" }}
+                    disabled={!!actionBusy}
+                    onClick={() => { void withMutation("retest", retest).catch(showActionError); }}
                   >
-                    仅重测
+                    {run.execution_mode === "agent_team" ? "继续验证" : "仅重测"}
                   </button>
                 )}
                 <button
-                  className="rounded-full border px-3 py-1 text-xs transition hover:bg-black/5"
+                  className="rounded-full border px-3 py-1 text-xs transition hover:bg-surface-2"
                   style={{ borderColor: "var(--danger)", color: "var(--danger)" }}
-                  onClick={() => retry().catch(() => {})}
+                  disabled={!!actionBusy}
+                  onClick={() => { void withMutation("retry", async () => { await retry(); setScenarioDraft(null); loadAll(); }).catch(showActionError); }}
                 >
                   整段重跑
                 </button>
@@ -1494,61 +1775,57 @@ export default function Page() {
             )}
           </div>
         )}
-        <div className="flex-1 space-y-3 overflow-auto px-4 py-4">
-          {messages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center text-center">
-              <div className="text-4xl">🏭</div>
-              <div className="mt-3 text-lg font-semibold">开始造一个产品吧</div>
-              <div className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>在下方输入你的想法，工厂会把它做成可上线的 AI 产品</div>
+        <div className="workspace-scroll min-h-0 flex-1 overflow-auto">
+          {workspaceView === "review" ? <ProjectReview key={projects.map((project) => project.id).join(",")} projects={projects} onSelectRun={handleSelect} onBack={() => setWorkspaceView("work")} /> : !run ? <WorkspaceHome idea={idea} onIdeaChange={setIdea} onSubmit={handleSend} busy={!!actionBusy} provider={llmProvider} profiles={llmProfiles} onProviderChange={setLlmProvider} executionMode={executionMode} onExecutionModeChange={setExecutionMode} /> : (
+            <div className="conversation-content mx-auto max-w-[980px] space-y-5 px-5 py-7 md:px-7">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 grow basis-[260px]">
+                  <div className="mb-2 flex items-center gap-2 text-[11px] text-muted"><span className="status-badge">{run.parent_run_id ? "修改版" : "初版"}</span><span>{runList.find((item) => item.id === run.id)?.created_at ? new Date(runList.find((item) => item.id === run.id)!.created_at).toLocaleDateString("zh-CN") : "当前项目"}</span><span>·</span><span>{pmStageLabel(run.current_stage)}</span></div>
+                  <h1 className="text-xl font-semibold leading-8 tracking-tight">{run.status === "paused" ? "任务已暂停，可以从检查点继续" : run.current_stage === "awaiting_answers" ? "先把关键需求聊清楚" : run.current_stage === "awaiting_prd_confirm" ? "确认这一版要做什么" : run.current_stage === "awaiting_acceptance" ? "用真实任务，验证这一版" : run.current_stage === "delivered" ? "这一版已完成交付" : ["failed", "gate_failed", "cancelled"].includes(run.current_stage) ? "构建需要你的关注" : "正在把想法变成应用"}</h1>
+                  <p className="mt-1 text-xs leading-6 text-muted">{run.current_stage === "awaiting_answers" ? "一次回答一个问题。选择方向，或直接写下你的想法。" : run.current_stage === "awaiting_prd_confirm" ? "在成果区核对需求，在这里补充修改并确认验收场景。" : run.current_stage === "awaiting_acceptance" ? "打开成品，逐项记录实际结果。发现问题后可以继续修改。" : run.current_stage === "delivered" ? "下载包含源码、需求文档和验证记录的交付包，或继续打磨下一版。" : "阶段进度会自动更新，生成的需求、代码和说明统一放在成果区。"}</p>
+                </div>
+                {["awaiting_acceptance", "delivered"].includes(run.current_stage) && <div className="flex flex-wrap gap-2"><button className="button-primary" onClick={handlePreview}><ArrowUpRight size={15} />打开成品</button><button className="button-secondary" onClick={() => { const field = document.querySelector<HTMLTextAreaElement>("#revision-form textarea"); field?.scrollIntoView({ behavior: "smooth", block: "center" }); field?.focus({ preventScroll: true }); }}><GitBranch size={15} />提出修改</button></div>}
+              </div>
+              {run.execution_mode === "agent_team" && run.status === "paused" && <div className="wf-card flex flex-wrap items-center justify-between gap-3 p-5"><div><p className="text-sm font-medium">处理已中断</p><p className="mt-1 text-xs leading-6 text-muted">已保留当前进度，可以继续完成这一版。</p></div><button className="button-primary" disabled={!!actionBusy} onClick={() => { void handleResume().catch(showActionError); }}>{actionBusy === "resume" ? "正在继续…" : "继续处理"}<ArrowRight size={14} /></button></div>}
+              {run.current_stage === "awaiting_prd_confirm" && run.acceptance_mode === "scenario" && <div className="flex gap-5 border-b border-line" role="tablist" aria-label="构建前确认"><button role="tab" aria-selected={reviewTab === "requirements"} className={cn("border-b-2 px-1 pb-3 text-xs", reviewTab === "requirements" ? "border-brand font-semibold text-brand" : "border-transparent text-muted")} onClick={() => setReviewTab("requirements")}>需求确认</button><button role="tab" aria-selected={reviewTab === "scenarios"} className={cn("border-b-2 px-1 pb-3 text-xs", reviewTab === "scenarios" ? "border-brand font-semibold text-brand" : "border-transparent text-muted")} onClick={() => setReviewTab("scenarios")}>验收场景 <span className="ml-1 rounded bg-surface-2 px-1.5 py-0.5 text-[10px]">{scenarios.length}</span>{scenarioDirty && <span className="ml-1 text-warn">· 未保存</span>}</button></div>}
+              {run.current_stage === "awaiting_answers" && currentQuestion && <DecisionPrompt key={`${run.id}-${currentQuestion.code}`} decision={currentQuestion} questionNumber={questionCount - pendingQuestions.length + 1} totalQuestions={questionCount} busy={!!actionBusy} onAnswer={handleAnswer} />}
+              {run.current_stage === "awaiting_prd_confirm" && (reviewTab === "requirements" || run.acceptance_mode !== "scenario") && <div className="xl:hidden"><button type="button" onClick={() => openOutput("prd")} className="button-secondary"><FolderOpen size={16} />查看需求文档</button></div>}
+              {(run.current_stage === "awaiting_answers" || run.current_stage === "awaiting_prd_confirm") && <div hidden={run.current_stage === "awaiting_prd_confirm" && run.acceptance_mode === "scenario" && reviewTab !== "requirements"}><details className="rounded-xl border border-line bg-panel"><summary className="cursor-pointer px-5 py-4 text-xs font-medium text-muted">{run.current_stage === "awaiting_answers" ? "补充整体需求或约束" : "这版需求需要调整？"}</summary><div className="border-t border-line p-4"><RequirementsForm key={`requirements-${run.id}`} busy={!!actionBusy} onSubmit={handleRequirements} /></div></details></div>}
+              {run.current_stage === "awaiting_prd_confirm" && reviewTab === "requirements" && <details className="rounded-xl border border-line bg-panel"><summary className="cursor-pointer px-5 py-4 text-xs font-medium text-muted">修改已确认的决策</summary><div className="border-t border-line p-5"><DecisionsInline decisions={run.decisions} onAnswer={handleAnswer} stage={run.current_stage} busy={!!actionBusy} /></div></details>}
+              {run.acceptance_mode === "scenario" && run.current_stage === "awaiting_prd_confirm" && reviewTab === "scenarios" && <AcceptanceScenariosEditor key={`scenarios-${run.id}`} scenarios={scenarios} dirty={scenarioDirty} busy={!!actionBusy} onChange={(items) => setScenarioDraft({ runId: run.id, items })} onSave={handleSaveScenarios} />}
+              {run.current_stage === "awaiting_prd_confirm" && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-panel p-4"><div><div className="text-sm font-medium">需求与验收场景准备好了？</div><p className="mt-1 text-xs text-muted">{confirmHint || "确认后将按当前需求构建，后续仍可继续迭代。"}</p></div><button className="button-primary" disabled={!!actionBusy || !!confirmHint} onClick={handleConfirm}>确认需求，开始构建<ArrowRight size={15} /></button></div>}
+              {run.current_stage === "awaiting_acceptance" && (run.acceptance_mode === "scenario" ? <ScenarioAcceptancePanel key={run.id} run={run} busy={!!actionBusy} onAccept={handleAccept} onSave={handleSaveResults} onRequestRevision={handleRequestRevision} /> : <AcceptancePanel key={run.id} onAccept={handleAccept} onReject={handleReject} previousRejection={run.acceptance_note === "验收通过" ? "" : run.acceptance_note || ""} busy={!!actionBusy} />)}
+              {run.current_stage === "delivered" && <AcceptanceRecord run={run} />}
+              <BundleDownload key={`bundle-${run.id}`} run={run} />
+              {canReviseRun(run) && <RevisionForm key={`revision-${run.id}-${revisionDraft?.runId === run.id ? revisionDraft.key : "manual"}`} initialText={revisionDraft?.runId === run.id ? revisionDraft.text : ""} busy={!!actionBusy} onSubmit={handleRevise} />}
+              {run.status !== "paused" && !["awaiting_answers", "awaiting_prd_confirm", "awaiting_acceptance", "delivered", "failed", "gate_failed", "cancelled"].includes(run.current_stage) && <div className="wf-card flex items-center gap-4 p-5"><span className="h-5 w-5 animate-spin rounded-full border-2 border-brand-soft border-t-brand" /><div><p className="text-sm font-medium">{pmStageLabel(run.current_stage)}</p><p className="mt-1 text-xs text-muted">正在处理当前步骤，完成后会自动进入下一阶段。</p></div></div>}
+              {role === "dev" && <details className="rounded-xl border border-line bg-panel"><summary className="cursor-pointer px-5 py-4 text-xs text-muted">开发阶段详情</summary><SessionRail run={run} role={role} onConfirm={handleConfirm} confirmDisabled={!!actionBusy || !!confirmHint} confirmHint={confirmHint} /></details>}
             </div>
-          ) : (
-            messages.map((m, i) => <Bubble key={i} msg={m} stage={run?.current_stage ?? null} onAnswer={handleAnswer} onAccept={handleAccept} onPreview={handlePreview} />)
           )}
-        </div>
-        <div className="shrink-0 px-4 pb-4">
-          <div className="flex items-center gap-2 rounded-full border p-1.5" style={{ borderColor: "var(--color-line)", background: "var(--color-surface)", boxShadow: "var(--shadow-md)" }}>
-            <select
-              className="shrink-0 rounded-full border px-3 py-2 text-xs outline-none"
-              style={{ borderColor: "var(--color-line)", background: "var(--color-bg)" }}
-              value={llmProvider}
-              onChange={(e) => setLlmProvider(e.target.value)}
-              aria-label="选择本轮模型"
-              title="选择本轮模型"
-            >
-              <option value="">跟随全局默认</option>
-              {llmProfiles.map((p) => (
-                <option key={p.id} value={p.id} disabled={!p.available}>
-                  {p.label}{p.available ? "" : "（未配置 Key）"}
-                </option>
-              ))}
-            </select>
-            <input
-              className="min-w-0 flex-1 bg-transparent px-3 py-2.5 text-sm outline-none"
-              placeholder="给造物坊 AI 发消息，描述你的产品想法…"
-              value={idea}
-              onChange={(e) => setIdea(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSend()}
-            />
-            <button className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[#0a0b0e] transition hover:opacity-90" style={{ background: "var(--gradient-brand)" }} onClick={handleSend}>
-              <Send size={18} />
-            </button>
-          </div>
         </div>
       </main>
 
       {/* 右分隔条 */}
-      <div className="hidden w-1 shrink-0 cursor-col-resize transition hover:bg-black/5 lg:block" style={{ background: "var(--color-line)" }} onMouseDown={startDrag("right")} />
+      {workspaceView === "work" && run && <div className="hidden w-px shrink-0 cursor-col-resize hover:bg-brand xl:block" onMouseDown={startDrag("right")} />}
 
       {/* 右栏：预览 */}
-      <aside className="hidden shrink-0 border-l lg:block" style={{ width: rightWidth, borderColor: "var(--color-line)", background: "var(--color-surface)" }}>
+      {workspaceView === "work" && run && <aside className={cn("min-h-0 shrink-0 flex-col overflow-hidden border-l bg-panel", inspectorOpen ? "fixed bottom-0 right-0 top-0 z-40 flex w-[min(92vw,600px)] shadow-xl" : "hidden xl:flex")} style={{ width: inspectorOpen ? undefined : `min(${rightWidth}px, 44vw)`, borderColor: "var(--color-line)" }}>
+        {inspectorOpen && <div className="flex h-12 shrink-0 items-center justify-between border-b border-line px-4 text-sm font-medium">成果区<button aria-label="关闭成果区" onClick={() => setInspectorOpen(false)}><X size={17} /></button></div>}
+        <div className="min-h-0 flex-1">
         <PreviewPanel
+          key={run.id}
           run={run}
           metrics={metrics}
           role={role}
           onPreview={handlePreview}
           onRunRefresh={async () => { if (run) await restore(run.id); }}
+          onResume={handleResume}
+          focusRequest={outputFocus}
         />
-      </aside>
+        </div>
+      </aside>}
+
+      {deleteTarget && <ProjectDeleteDialog key={deleteTarget.id} project={deleteTarget} busy={actionBusy === "delete-project"} error={deleteError} onCancel={() => { if (!actionPending.current) { setDeleteTarget(null); setDeleteError(null); } }} onConfirm={() => { void handleProjectDelete(); }} />}
 
       {execConfirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
