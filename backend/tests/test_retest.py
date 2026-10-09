@@ -1,8 +1,11 @@
 """第十三刀：gate_failed 就地重测（续跑 testing），与整段 retry 区分。"""
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
+
+import pytest
 
 from app.models import FactoryRun, SessionLocal, StageEvent
 from app.services.stages import Stage
@@ -58,6 +61,7 @@ def test_retest_gate_failed_with_code_same_id(client):
     wait_stage(client, run_id, "awaiting_answers")
     _write_code(run_id)
     _mark_gate_failed(run_id)
+    assert client.get(f"/api/v1/runs/{run_id}").json()["can_retest"] is True
 
     r = client.post(f"/api/v1/runs/{run_id}/retest")
     assert r.status_code == 200, r.text
@@ -99,6 +103,7 @@ def test_retest_without_code_409(client):
     run_id = r.json()["id"]
     wait_stage(client, run_id, "awaiting_answers")
     _mark_gate_failed(run_id)
+    assert client.get(f"/api/v1/runs/{run_id}").json()["can_retest"] is False
 
     r = client.post(f"/api/v1/runs/{run_id}/retest")
     assert r.status_code == 409
@@ -120,6 +125,7 @@ def test_retest_rejects_awaiting_acceptance(client):
     finally:
         session.close()
     _write_code(run_id)
+    assert client.get(f"/api/v1/runs/{run_id}").json()["can_retest"] is False
 
     r = client.post(f"/api/v1/runs/{run_id}/retest")
     assert r.status_code == 409
@@ -141,3 +147,44 @@ def test_retest_differs_from_retry(client):
 
     old = client.get(f"/api/v1/runs/{run_id}").json()
     assert old["current_stage"] == "gate_failed"
+    assert old["can_retest"] is True
+
+
+@pytest.mark.parametrize("harness_status", ["failed", "cancelled", "interrupted"])
+def test_agent_team_stopped_harness_is_not_retestable_even_with_code(client, harness_status):
+    r = client.post("/api/v1/runs", json={"idea": "协作失败不能就地重测", "execution_mode": "agent_team"})
+    run_id = r.json()["id"]
+    wait_stage(client, run_id, "awaiting_answers")
+    _write_code(run_id)
+    session = SessionLocal()
+    try:
+        run = session.get(FactoryRun, run_id)
+        run.current_stage = Stage.GATE_FAILED.value
+        run.status = "done"
+        run.execution_mode = "agent_team"
+        run.execution_state = json.dumps({"version": 1, "status": harness_status, "stop_reason": "检查未通过"}, ensure_ascii=False)
+        session.commit()
+    finally:
+        session.close()
+
+    body = client.get(f"/api/v1/runs/{run_id}").json()
+    assert body["can_retest"] is False
+    denied = client.post(f"/api/v1/runs/{run_id}/retest")
+    assert denied.status_code == 409
+    assert denied.json()["error"]["code"] == "agent_retest_not_allowed"
+
+
+def test_failed_stage_with_code_reports_can_retest(client):
+    r = client.post("/api/v1/runs", json={"idea": "失败且已有代码可重测"})
+    run_id = r.json()["id"]
+    wait_stage(client, run_id, "awaiting_answers")
+    _write_code(run_id)
+    session = SessionLocal()
+    try:
+        run = session.get(FactoryRun, run_id)
+        run.current_stage = Stage.FAILED.value
+        run.status = "done"
+        session.commit()
+    finally:
+        session.close()
+    assert client.get(f"/api/v1/runs/{run_id}").json()["can_retest"] is True

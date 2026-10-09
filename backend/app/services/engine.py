@@ -447,6 +447,36 @@ def cancel_run(run_id: str, reason: str = "cancelled") -> None:
 
 
 
+def assess_retest(session: Session, run: FactoryRun) -> tuple[AppError | None, bool, dict]:
+    """就地重测的唯一判定。返回 (拒绝原因, 是否恢复已通过检查的开发检查点, 检查点)。"""
+    state = agent_harness.load_state(run)
+    recover_checked_builder = agent_harness.can_recover_builder_budget(run, state)
+    if getattr(run, "execution_mode", "workflow") == "agent_team" and state.get("status") in {"failed", "cancelled", "interrupted"} and not recover_checked_builder:
+        return AppError("agent_retest_not_allowed", "协作预算和检查点不能通过重测重置；中断请继续执行，失败请创建修改版本", 409), recover_checked_builder, state
+    stage = Stage(run.current_stage)
+    if stage not in {Stage.GATE_FAILED, Stage.FAILED}:
+        return AppError(
+            "not_retestable",
+            "当前状态不能仅重测，仅闸门失败（或失败且已有代码）可续跑测试",
+            409,
+        ), recover_checked_builder, state
+    if not testing.has_app_code(run.id):
+        return AppError(
+            "no_code_to_retest",
+            "磁盘上没有该运行的生成代码，请使用「整段重跑」",
+            409,
+        ), recover_checked_builder, state
+    if recover_checked_builder and not gates.prd_confirmed(session, run):
+        return AppError("prd_not_confirmed", "请先完成人工需求确认", 409), recover_checked_builder, state
+    return None, recover_checked_builder, state
+
+
+def can_retest_run(session: Session, run: FactoryRun) -> bool:
+    """供运行详情使用，与 POST /retest 共用 assess_retest，避免前后端各写一套规则。"""
+    blocked, _recover, _state = assess_retest(session, run)
+    return blocked is None
+
+
 def retest_run(run_id: str) -> None:
     """就地重测；协作预算边界误判只恢复原开发检查点，仍需独立验证。"""
     with run_lock(run_id):
@@ -460,26 +490,9 @@ def _retest_run_locked(run_id: str) -> None:
         run = session.get(FactoryRun, run_id)
         if run is None:
             raise AppError("run_not_found", "运行不存在", 404)
-        stage = Stage(run.current_stage)
-        state = agent_harness.load_state(run)
-        recover_checked_builder = agent_harness.can_recover_builder_budget(run, state)
-        if getattr(run, "execution_mode", "workflow") == "agent_team" and state.get("status") in {"failed", "cancelled", "interrupted"} and not recover_checked_builder:
-            raise AppError("agent_retest_not_allowed", "协作预算和检查点不能通过重测重置；中断请继续执行，失败请创建修改版本", 409)
-        allowed = {Stage.GATE_FAILED, Stage.FAILED}
-        if stage not in allowed:
-            raise AppError(
-                "not_retestable",
-                "当前状态不能仅重测，仅闸门失败（或失败且已有代码）可续跑测试",
-                409,
-            )
-        if not testing.has_app_code(run_id):
-            raise AppError(
-                "no_code_to_retest",
-                "磁盘上没有该运行的生成代码，请使用「整段重跑」",
-                409,
-            )
-        if recover_checked_builder and not gates.prd_confirmed(session, run):
-            raise AppError("prd_not_confirmed", "请先完成人工需求确认", 409)
+        blocked, recover_checked_builder, state = assess_retest(session, run)
+        if blocked is not None:
+            raise blocked
         run.failure_reason = None
         run.failure_code = ""
         run.status = "running"

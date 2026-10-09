@@ -8,6 +8,7 @@ import {
   canShowAlwaysAllow,
   canRetestInPlace,
   canFullRetry,
+  retestFallbackHint,
   summarizeAppStatus,
   summarizeDecisionLedger,
   pmFailureText,
@@ -264,11 +265,21 @@ describe("决策台账摘要", () => {
 
 
 describe("就地重测 / 整段重跑条件", () => {
-  it("gate_failed / failed 可仅重测", () => {
-    expect(canRetestInPlace("gate_failed")).toBe(true);
-    expect(canRetestInPlace("failed")).toBe(true);
-    expect(canRetestInPlace("cancelled")).toBe(false);
-    expect(canRetestInPlace("awaiting_acceptance")).toBe(false);
+  it("只在后端允许时提供就地重测", () => {
+    const gateFailed = { current_stage: "gate_failed" as const };
+    const failed = { current_stage: "failed" as const, can_retest: false };
+    expect(canRetestInPlace({ can_retest: true })).toBe(true);
+    expect(canRetestInPlace(gateFailed)).toBe(false);
+    expect(canRetestInPlace(failed)).toBe(false);
+    expect(canRetestInPlace({ can_retest: false })).toBe(false);
+    expect(canRetestInPlace(null)).toBe(false);
+  });
+
+  it("后端拒绝就地重测时引导整段重跑", () => {
+    expect(retestFallbackHint({ current_stage: "gate_failed", can_retest: false })).toBe("当前不能仅重测，请整段重跑");
+    expect(retestFallbackHint({ current_stage: "failed", can_retest: false, execution_mode: "agent_team" })).toBe("当前不能继续验证，请整段重跑");
+    expect(retestFallbackHint({ current_stage: "gate_failed", can_retest: true })).toBeNull();
+    expect(retestFallbackHint({ current_stage: "cancelled", can_retest: false })).toBeNull();
   });
 
   it("gate_failed / failed / cancelled 可整段重跑", () => {
