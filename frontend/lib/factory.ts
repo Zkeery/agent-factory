@@ -78,6 +78,8 @@ export interface Run {
   status: string;
   execution_mode?: ExecutionMode;
   current_stage: Stage;
+  /** 后端判定的就地重测许可。缺省视为不允许。 */
+  can_retest?: boolean;
   failure_reason: string | null;
   failure_code?: string;
   project_id?: string | null;
@@ -335,9 +337,20 @@ export const retryRun = (id: string) =>
 export const retestRun = (id: string) =>
   api<Run>(`/api/v1/runs/${id}/retest`, { method: "POST" });
 
-/** 闸门失败 / 失败：可尝试「仅重测」（后端仍会校验磁盘代码）。 */
-export function canRetestInPlace(stage: Stage | null | undefined): boolean {
-  return stage === "gate_failed" || stage === "failed";
+/** 是否提供「仅重测 / 继续验证」。只信后端 can_retest，阶段本身不算许可。 */
+export function canRetestInPlace(
+  run: { can_retest?: boolean; current_stage?: Stage | null } | null | undefined,
+): boolean {
+  return run?.can_retest === true;
+}
+
+/** 失败且后端不允许就地重测时，引导改走整段重跑。 */
+export function retestFallbackHint(
+  run: { current_stage?: Stage | null; can_retest?: boolean; execution_mode?: ExecutionMode | null } | null | undefined,
+): string | null {
+  if (!run || run.can_retest === true) return null;
+  if (run.current_stage !== "gate_failed" && run.current_stage !== "failed") return null;
+  return run.execution_mode === "agent_team" ? "当前不能继续验证，请整段重跑" : "当前不能仅重测，请整段重跑";
 }
 
 /** 失败 / 闸门失败 / 已取消：可「整段重跑」。 */

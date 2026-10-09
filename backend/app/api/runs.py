@@ -92,6 +92,7 @@ def _run_out(session: Session, run: FactoryRun) -> RunOut:
         idea=run.idea,
         status=run.status,
         current_stage=run.current_stage,
+        can_retest=engine.can_retest_run(session, run),
         failure_reason=run.failure_reason,
         failure_code=(getattr(run, 'failure_code', None) or '') or '',
         project_id=run.project_id,

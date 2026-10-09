@@ -189,6 +189,7 @@ class RunOut(BaseModel):
     idea: str
     status: str
     current_stage: str
+    can_retest: bool = Field(default=False, description="当前是否允许就地重测；与重测接口使用同一判定")
     failure_reason: str | None = None
     failure_code: str = ""
     project_id: str | None = None

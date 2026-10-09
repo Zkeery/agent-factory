@@ -19,15 +19,18 @@ from app.api.llm import router as llm_router
 from app.api.schedules import router as schedules_router
 from app.api.execution import router as execution_router
 from app.api.insights import router as insights_router
+from app.core.access_log import QueryCredentialRedactionMiddleware, install_access_log_redaction
 from app.core.errors import register_error_handlers
 from app.models import init_db
 from app.services import engine, scheduler, watchdog
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+install_access_log_redaction()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    install_access_log_redaction()
     init_db()
     engine.recover_interrupted_executions()
     watchdog.start_watchdog()
@@ -48,6 +51,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
+app.add_middleware(QueryCredentialRedactionMiddleware)
 
 app.include_router(auth_router)
 app.include_router(runs_router)

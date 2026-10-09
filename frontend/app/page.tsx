@@ -12,6 +12,7 @@ import {
   authorizeWorkspace,
   canFullRetry,
   canRetestInPlace,
+  retestFallbackHint,
   canShowAlwaysAllow,
   DEFAULT_ACCEPTANCE_CHECKLIST,
   Artifact,
@@ -1753,7 +1754,7 @@ export default function Page() {
             </div>
             {run && canFullRetry(run.current_stage) && (
               <div className="flex shrink-0 items-center gap-2">
-                {canRetestInPlace(run.current_stage) && (
+                {canRetestInPlace(run) ? (
                   <button
                     className="rounded-full px-3 py-1 text-xs font-medium text-white transition"
                     style={{ background: "var(--danger)" }}
@@ -1762,7 +1763,9 @@ export default function Page() {
                   >
                     {run.execution_mode === "agent_team" ? "继续验证" : "仅重测"}
                   </button>
-                )}
+                ) : retestFallbackHint(run) ? (
+                  <span className="whitespace-nowrap text-right leading-5">{retestFallbackHint(run)}</span>
+                ) : null}
                 <button
                   className="rounded-full border px-3 py-1 text-xs transition hover:bg-surface-2"
                   style={{ borderColor: "var(--danger)", color: "var(--danger)" }}

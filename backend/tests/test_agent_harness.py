@@ -143,6 +143,7 @@ def test_builder_budget_cannot_hide_failed_checks_changed_source_or_failed_actio
     run.current_stage, run.status = "gate_failed", "done"
     session.commit()
     assert not harness.can_recover_builder_budget(run)
+    assert engine.can_retest_run(session, run) is False
     with pytest.raises(AppError, match="不能通过重测重置"):
         engine.retest_run(run.id)
     assert harness.load_state(run)["turns"] == {"builder:0": 6}
@@ -171,6 +172,7 @@ def test_legacy_builder_budget_failure_retest_preserves_run_and_enters_verifier(
     saved = harness.load_state(run)
     calls = []
     monkeypatch.setattr(engine, "start_run_async", lambda ident: calls.append(ident))
+    assert engine.can_retest_run(session, run) is True
     engine.retest_run(run.id)
     session.refresh(run)
     state = harness.load_state(run)
@@ -302,6 +304,7 @@ def test_repair_budget_exhaustion_cannot_resume_or_retest(session):
         engine.prepare_execution_resume(session, run)
     run.current_stage, run.status = "gate_failed", "done"
     session.commit()
+    assert engine.can_retest_run(session, run) is False
     with pytest.raises(AppError, match="不能通过重测重置"):
         engine.retest_run(run.id)
 
