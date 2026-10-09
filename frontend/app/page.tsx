@@ -1764,7 +1764,7 @@ export default function Page() {
                     {run.execution_mode === "agent_team" ? "继续验证" : "仅重测"}
                   </button>
                 ) : retestFallbackHint(run) ? (
-                  <span className="max-w-[9rem] text-right leading-5">{retestFallbackHint(run)}</span>
+                  <span className="whitespace-nowrap text-right leading-5">{retestFallbackHint(run)}</span>
                 ) : null}
                 <button
                   className="rounded-full border px-3 py-1 text-xs transition hover:bg-surface-2"
