@@ -87,22 +87,34 @@ def test_middleware_redacts_query_before_outer_send_sees_it():
 
 
 def test_events_query_token_still_authenticates(client):
-    from fastapi.testclient import TestClient
-
-    from app.main import app
+    from app.models import FactoryRun, SessionLocal
+    from app.services import engine as run_engine
 
     created = client.post("/api/v1/runs", json={"idea": "进度流仍可用查询令牌"})
     assert created.status_code == 201
     run_id = created.json()["id"]
     token = client.headers["Authorization"].split(" ", 1)[1]
-    with TestClient(app) as fresh:
-        me = fresh.get("/api/v1/auth/me", params={"token": token})
+    run_engine.wait_for_background_runs(timeout=10)
+    session = SessionLocal()
+    try:
+        run = session.get(FactoryRun, run_id)
+        run.current_stage = "cancelled"
+        run.status = "done"
+        session.commit()
+    finally:
+        session.close()
+    saved = client.headers.pop("Authorization")
+    try:
+        me = client.get("/api/v1/auth/me", params={"token": token})
         assert me.status_code == 200
-        denied = fresh.get("/api/v1/auth/me")
-        assert denied.status_code == 401
-        with fresh.stream("GET", f"/api/v1/runs/{run_id}/events", params={"token": token}) as resp:
+        assert client.get("/api/v1/auth/me").status_code == 401
+        with client.stream("GET", f"/api/v1/runs/{run_id}/events", params={"token": token}) as resp:
             assert resp.status_code == 200
             assert "text/event-stream" in resp.headers.get("content-type", "")
+            body = "".join(resp.iter_text())
+    finally:
+        client.headers["Authorization"] = saved
+    assert "event: done" in body
 
 
 def _free_port() -> int:

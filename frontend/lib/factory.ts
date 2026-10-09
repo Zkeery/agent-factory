@@ -337,8 +337,10 @@ export const retryRun = (id: string) =>
 export const retestRun = (id: string) =>
   api<Run>(`/api/v1/runs/${id}/retest`, { method: "POST" });
 
-/** 是否提供「仅重测 / 继续验证」。只信后端 can_retest，避免与服务端规则分叉。 */
-export function canRetestInPlace(run: { can_retest?: boolean } | null | undefined): boolean {
+/** 是否提供「仅重测 / 继续验证」。只信后端 can_retest，阶段本身不算许可。 */
+export function canRetestInPlace(
+  run: { can_retest?: boolean; current_stage?: Stage | null } | null | undefined,
+): boolean {
   return run?.can_retest === true;
 }
 

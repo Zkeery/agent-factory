@@ -266,12 +266,11 @@ describe("决策台账摘要", () => {
 
 describe("就地重测 / 整段重跑条件", () => {
   it("只在后端允许时提供就地重测", () => {
-    const gateFailed = { current_stage: "gate_failed" as const };
-    const failed = { current_stage: "failed" as const, can_retest: false };
-    expect(canRetestInPlace({ can_retest: true })).toBe(true);
-    expect(canRetestInPlace(gateFailed)).toBe(false);
-    expect(canRetestInPlace(failed)).toBe(false);
-    expect(canRetestInPlace({ can_retest: false })).toBe(false);
+    expect(canRetestInPlace({ current_stage: "gate_failed", can_retest: true })).toBe(true);
+    expect(canRetestInPlace({ current_stage: "failed", can_retest: true })).toBe(true);
+    expect(canRetestInPlace({ current_stage: "gate_failed" })).toBe(false);
+    expect(canRetestInPlace({ current_stage: "failed", can_retest: false })).toBe(false);
+    expect(canRetestInPlace({ current_stage: "cancelled", can_retest: false })).toBe(false);
     expect(canRetestInPlace(null)).toBe(false);
   });
 
