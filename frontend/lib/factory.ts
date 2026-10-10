@@ -495,13 +495,39 @@ const PM_FAILURE_TEXT: Record<string, { message: string; suggestion: string }> =
   internal_error: { message: "这次没做成功", suggestion: "点「整段重跑」再试，或让开发者看看原因" },
 };
 
+function budgetCallLimit(reason: string): boolean {
+  return /已达到每轮(?:\d+|六)次模型调用上限/.test(reason);
+}
+
 /** PM 视角的失败人话；未知 code 或空走 internal_error 兜底。 */
 export function pmFailureText(code?: string | null, reason?: string | null): { message: string; suggestion: string } {
-  if (code === "agent_execution_failed" && reason?.includes("模型输出被截断")) {
+  const text = reason || "";
+  if (code === "agent_execution_failed" && text.includes("模型输出被截断")) {
     return { message: "模型输出被截断", suggestion: "需求一次写得太大。缩小范围，或先做能跑起来的主路径后再重试" };
   }
-  if (code === "agent_execution_failed" && reason?.endsWith("已达到每轮六次模型调用上限")) {
-    return { message: "本轮协作达到调用上限", suggestion: "执行记录和产物已经保存，可查看协作记录定位停止位置" };
+  if (code === "agent_execution_failed" && (text.includes("自动检查未通过") || text.includes("检查报错"))) {
+    return {
+      message: "代码没通过自动检查，修复次数也用完了",
+      suggestion: "看停止原因里的具体报错。把需求收成能跑起来的主路径，或创建修改版本再试",
+    };
+  }
+  if (code === "agent_execution_failed" && /已达到(?:\d+|两)轮自动修复上限/.test(text)) {
+    return {
+      message: "自动修复次数已用完",
+      suggestion: "查看协作记录中的检查报错，收窄需求或创建修改版本",
+    };
+  }
+  if (code === "agent_execution_failed" && budgetCallLimit(text)) {
+    if (text.includes("还没有可检查") || text.includes("没有可检查的源码")) {
+      return {
+        message: "这轮还没写出可运行的代码",
+        suggestion: "把需求收成一个页面里能完成的主路径，然后整段重跑",
+      };
+    }
+    return {
+      message: "本轮协作达到调用上限",
+      suggestion: "执行记录已经保存。有源码时会先跑自动检查；仍失败就按检查报错收窄需求后再试",
+    };
   }
   return PM_FAILURE_TEXT[code || ""] ?? PM_FAILURE_TEXT.internal_error;
 }

@@ -37,6 +37,18 @@ describe("失败人话 pmFailureText", () => {
     expect(text.message).toBe("模型输出被截断");
     expect(text.suggestion).toContain("主路径");
   });
+
+  it("调用上限按有没有源码给出下一步", () => {
+    const historical = pmFailureText("agent_execution_failed", "开发与修复已达到每轮六次模型调用上限");
+    expect(historical.message).toBe("本轮协作达到调用上限");
+    expect(historical.suggestion).toContain("自动检查");
+    const empty = pmFailureText("agent_execution_failed", "开发与修复已达到每轮8次模型调用上限。磁盘上还没有可检查的源码，因此没有进入自动检查。下一步：把需求收成单个页面能完成的主路径后整段重跑。");
+    expect(empty.message).toBe("这轮还没写出可运行的代码");
+    expect(empty.suggestion).toContain("主路径");
+    const checked = pmFailureText("agent_execution_failed", "自动检查未通过，且已达到3轮修复上限。下一步：按报错收窄需求或创建修改版本。最近一次检查报错：语法错误");
+    expect(checked.message).toContain("自动检查");
+    expect(checked.suggestion).toContain("报错");
+  });
 });
 
 describe("定时任务内部机制文案", () => {

@@ -75,7 +75,7 @@ def test_mock_uses_actual_tools_and_independent_verifier(session):
 
 
 class LastTurnCheckMock(SafeMock):
-    """开发者直到第六次调用才完成检查，没有额外调用可主动 handoff。"""
+    """开发者直到本轮最后一次调用才完成检查，没有额外调用可主动 handoff。"""
 
     def __init__(self, *, bad_code=False, change_after_pass=False, fail_after_pass=False):
         super().__init__()
@@ -89,19 +89,20 @@ class LastTurnCheckMock(SafeMock):
         if role != "builder":
             return super().agent_turn(role, messages, tools, context)
         turn = sum(item["role"] == "assistant" for item in messages) + 1
+        last = harness.MAX_TURNS
         if turn == 1:
             files = dict(FILES)
             if self.bad_code:
                 files["app.py"] = "def broken(:\n"
             return call("write_files", {"files": files})
-        if turn == 6 and self.change_after_pass:
+        if turn == last and self.change_after_pass:
             return call("write_files", {"files": {"app.py": SAFE_APP + "\n# 检查后的修改\n"}})
-        if turn == 6 and self.fail_after_pass:
+        if turn == last and self.fail_after_pass:
             return {"tool_calls": [
                 {"id": "check", "name": "run_checks", "arguments": {}},
                 {"id": "bad-read", "name": "read_file", "arguments": {"path": "../private"}},
             ]}
-        if turn == (5 if self.change_after_pass else 6):
+        if turn == (last - 1 if self.change_after_pass else last):
             return call("run_checks")
         return call("read_file", {"path": "app.py"})
 
@@ -121,8 +122,8 @@ def test_sixth_builder_call_passes_and_executor_hands_to_independent_verifier(se
     client = LastTurnCheckMock()
     assert harness.execute(session, run, client, PRD)
     state = harness.load_state(run)
-    assert state["turns"] == {"builder:0": 6, "verifier:0": 3}
-    assert client.calls.count("builder") == 6
+    assert state["turns"] == {"builder:0": harness.MAX_TURNS, "verifier:0": 3}
+    assert client.calls.count("builder") == harness.MAX_TURNS
     assert [check["role"] for check in state["checks"]] == ["builder", "verifier"]
     assert state["validated_source_hash"] == harness.source_hash(run.id)
     automatic = [step for step in state["steps"] if step["tool"] == "budget_handoff"]
@@ -131,22 +132,36 @@ def test_sixth_builder_call_passes_and_executor_hands_to_independent_verifier(se
     assert run.accepted_at is None
 
 
-@pytest.mark.parametrize("option", ["bad_code", "change_after_pass", "fail_after_pass"])
-def test_builder_budget_cannot_hide_failed_checks_changed_source_or_failed_actions(session, option):
+def test_failed_source_at_budget_is_not_handed_off_as_success(session):
     run = make_run(session)
-    client = LastTurnCheckMock(**{option: True})
-    assert not harness.execute(session, run, client, PRD)
+    assert not harness.execute(session, run, LastTurnCheckMock(bad_code=True), PRD)
     state = harness.load_state(run)
-    assert state["turns"] == {"builder:0": 6}
-    assert state["status"] == "failed" and not state["handoffs"]
+    assert state["status"] == "failed" and "validated_source_hash" not in state
+    assert state["checks"] and all(item["passed"] is False for item in state["checks"])
     assert "budget_handoff" not in [step["tool"] for step in state["steps"]]
+    assert state["repair_rounds"] == harness.MAX_REPAIRS
     run.current_stage, run.status = "gate_failed", "done"
     session.commit()
     assert not harness.can_recover_builder_budget(run)
     assert engine.can_retest_run(session, run) is False
     with pytest.raises(AppError, match="不能通过重测重置"):
         engine.retest_run(run.id)
-    assert harness.load_state(run)["turns"] == {"builder:0": 6}
+    assert harness.load_state(run)["turns"]["builder:0"] == harness.MAX_TURNS
+
+
+@pytest.mark.parametrize("option", ["change_after_pass", "fail_after_pass"])
+def test_budget_rechecks_changed_source_or_failed_followup_before_handoff(session, option):
+    run = make_run(session)
+    assert harness.execute(session, run, LastTurnCheckMock(**{option: True}), PRD)
+    state = harness.load_state(run)
+    builder_checks = [item for item in state["checks"] if item["role"] == "builder"]
+    assert builder_checks[-1]["passed"] is True
+    assert builder_checks[-1]["source_hash"] == harness.source_hash(run.id)
+    assert any(step["tool"] == "budget_handoff" for step in state["steps"])
+    if option == "change_after_pass":
+        assert builder_checks[-1]["source_hash"] != builder_checks[-2]["source_hash"]
+    else:
+        assert any(step["tool"] == "read_file" and step["status"] == "failed" for step in state["steps"])
 
 
 def test_builder_budget_handoff_never_substitutes_for_verifier_check(session):
@@ -158,7 +173,7 @@ def test_builder_budget_handoff_never_substitutes_for_verifier_check(session):
     run = make_run(session)
     assert not harness.execute(session, run, UncheckedVerifier(), PRD)
     state = harness.load_state(run)
-    assert state["turns"] == {"builder:0": 6, "verifier:0": 6}
+    assert state["turns"] == {"builder:0": harness.MAX_TURNS, "verifier:0": harness.MAX_TURNS}
     assert state["status"] == "failed" and "validated_source_hash" not in state
     assert [check["role"] for check in state["checks"]] == ["builder"]
 
@@ -177,7 +192,7 @@ def test_legacy_builder_budget_failure_retest_preserves_run_and_enters_verifier(
     session.refresh(run)
     state = harness.load_state(run)
     assert calls == [run.id] and run.current_stage == "building"
-    assert state["turns"] == saved["turns"] == {"builder:0": 6}
+    assert state["turns"] == saved["turns"] == {"builder:0": harness.MAX_TURNS}
     assert state["checks"] == saved["checks"] and state["messages"] == saved["messages"]
     assert run.failure_code == "" and run.failure_reason is None
     class VerifierOnly(SafeMock):
@@ -188,7 +203,7 @@ def test_legacy_builder_budget_failure_retest_preserves_run_and_enters_verifier(
     engine.advance(session, run)
     assert run.current_stage == "awaiting_acceptance" and run.accepted_at is None
     state = harness.load_state(run)
-    assert state["turns"] == {"builder:0": 6, "verifier:0": 3}
+    assert state["turns"] == {"builder:0": harness.MAX_TURNS, "verifier:0": 3}
     assert len(state["checks"]) == 2 and state["checks"][-1]["role"] == "verifier"
 
 
@@ -213,7 +228,7 @@ def test_concurrent_budget_recovery_only_starts_original_checkpoint_once(session
         assert sorted(future.result(timeout=10) for future in futures) == ["not_retestable", "started"]
     session.refresh(run)
     assert starts == [run_id] and run.current_stage == "building"
-    assert harness.load_state(run)["turns"] == {"builder:0": 6}
+    assert harness.load_state(run)["turns"] == {"builder:0": harness.MAX_TURNS}
     events = session.query(StageEvent).filter_by(run_id=run_id, event_type="agent_execution").all()
     assert sum("恢复已通过检查" in event.payload for event in events) == 1
 
@@ -240,7 +255,7 @@ def test_legacy_budget_recovery_requires_unchanged_check_and_confirmed_prd(sessi
     with pytest.raises(AppError):
         engine.retest_run(run.id)
     session.refresh(run)
-    assert run.current_stage == "gate_failed" and harness.load_state(run)["turns"] == {"builder:0": 6}
+    assert run.current_stage == "gate_failed" and harness.load_state(run)["turns"] == {"builder:0": harness.MAX_TURNS}
     assert not starts
 
 
@@ -250,17 +265,17 @@ def test_interruption_after_sixth_check_can_resume_without_refunding_builder_bud
     did_interrupt = []
     def interrupt_after_committed_check(db, current, state, event=None):
         original(db, current, state, event)
-        if state.get("turns", {}).get("builder:0") == 6 and (state.get("last_check") or {}).get("passed") is True and not state.get("pending") and not did_interrupt:
+        if state.get("turns", {}).get("builder:0") == harness.MAX_TURNS and (state.get("last_check") or {}).get("passed") is True and not state.get("pending") and not did_interrupt:
             did_interrupt.append(True)
             raise RuntimeError("提交最后检查后进程中断")
     monkeypatch.setattr(harness, "_persist", interrupt_after_committed_check)
     with pytest.raises(harness.ExecutionInterrupted):
         harness.execute(session, run, LastTurnCheckMock(), PRD)
     assert run.status == "paused" and harness.execution_view(run)["resumable"]
-    assert harness.load_state(run)["turns"] == {"builder:0": 6}
+    assert harness.load_state(run)["turns"] == {"builder:0": harness.MAX_TURNS}
     engine.prepare_execution_resume(session, run)
     assert harness.execute(session, run, SafeMock(), PRD)
-    assert harness.load_state(run)["turns"] == {"builder:0": 6, "verifier:0": 3}
+    assert harness.load_state(run)["turns"] == {"builder:0": harness.MAX_TURNS, "verifier:0": 3}
 
 
 class FixingMock(SafeMock):
@@ -296,8 +311,8 @@ def test_repair_budget_exhaustion_cannot_resume_or_retest(session):
     run = make_run(session)
     assert not harness.execute(session, run, FixingMock(always_bad=True), PRD)
     state = harness.load_state(run)
-    assert state["repair_rounds"] == 2 and state["status"] == "failed"
-    assert len(state["tasks"]) == 6 and len(state["checks"]) == 6
+    assert state["repair_rounds"] == harness.MAX_REPAIRS and state["status"] == "failed"
+    assert len(state["tasks"]) == 2 * (harness.MAX_REPAIRS + 1) and len(state["checks"]) == 2 * (harness.MAX_REPAIRS + 1)
     assert all(n == 3 for n in state["turns"].values())
     assert not harness.execution_view(run)["resumable"]
     with pytest.raises(AppError, match="中断检查点"):
@@ -323,11 +338,11 @@ def test_invalid_tool_or_missing_calls_consumes_persistent_budget(session, isola
     run = make_run(session)
     assert not harness.execute(session, run, BadMock(), PRD)
     state = harness.load_state(run)
-    assert state["turns"] == {"builder:0": 6}
+    assert state["turns"] == {"builder:0": harness.MAX_TURNS}
     assert state["status"] == "failed" and not state["checks"]
     assert not list(isolated_code.rglob("escaped*"))
     assert not harness.execute(session, run, SafeMock(), PRD)
-    assert harness.load_state(run)["turns"] == {"builder:0": 6}
+    assert harness.load_state(run)["turns"] == {"builder:0": harness.MAX_TURNS}
 
 
 def test_verifier_cannot_write_or_pass_without_own_check(session):
@@ -343,7 +358,7 @@ def test_verifier_cannot_write_or_pass_without_own_check(session):
     run = make_run(session)
     assert not harness.execute(session, run, BadVerifier(), PRD)
     state = harness.load_state(run)
-    assert state["turns"]["verifier:0"] == 6
+    assert state["turns"]["verifier:0"] == harness.MAX_TURNS
     assert harness.read_files(run.id)["app.py"] == SAFE_APP
     assert not any(c["role"] == "verifier" for c in state["checks"])
 
@@ -436,7 +451,7 @@ def test_cancel_after_checks_does_not_run_followup_tools(session, monkeypatch):
 def test_startup_recovery_preserves_budget_and_exhausted_call_is_terminal(session):
     resumable = make_run(session)
     exhausted = make_run(session)
-    for run, count in ((resumable, 2), (exhausted, 6)):
+    for run, count in ((resumable, 2), (exhausted, harness.MAX_TURNS)):
         state = harness._new_state()
         state["turns"]["builder:0"] = count
         run.execution_state = json.dumps(state)
@@ -482,7 +497,7 @@ def test_cancel_committed_before_budget_failure_remains_authoritative(session, m
     run = make_run(session)
     state = harness._new_state()
     harness._ensure_task(session, run, state, PRD)
-    state["turns"]["builder:0"] = 6
+    state["turns"]["builder:0"] = harness.MAX_TURNS
     run.execution_state = json.dumps(state)
     session.commit()
     original_fail = harness._fail

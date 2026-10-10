@@ -59,7 +59,7 @@ export function WorkspaceHome({ idea, onIdeaChange, onSubmit, busy, provider, pr
         <button className="button-primary" disabled={busy || !idea.trim()} onClick={onSubmit}>{busy ? "正在创建…" : "开始共创"}<ArrowRight size={16} /></button>
       </div>
     </div>
-    <div className="mb-6 mt-3 flex items-center justify-between gap-2 text-[11px] leading-5 text-muted"><span>{executionMode === "agent_team" ? "先确认需求。开发与验证 Agent 分工执行，检查失败后最多自动修复 2 轮。" : "先确认需求，再按固定阶段构建。你随时可以补充或纠正。"}</span><span className="hidden shrink-0 lg:inline">⌘ / Ctrl + Enter</span></div>
+    <div className="mb-6 mt-3 flex items-center justify-between gap-2 text-[11px] leading-5 text-muted"><span>{executionMode === "agent_team" ? "先确认需求。开发与验证 Agent 分工执行，检查失败后最多自动修复 3 轮。" : "先确认需求，再按固定阶段构建。你随时可以补充或纠正。"}</span><span className="hidden shrink-0 lg:inline">⌘ / Ctrl + Enter</span></div>
 
     <div className="mb-3 mt-7 flex items-center justify-between"><h2 className="text-xs font-medium text-ink">从一个方向开始</h2><span className="studio-kicker" style={{ color: "var(--muted-2)", fontSize: 9 }}>QUICK START ↗</span></div>
     <div className="grid gap-3 min-[701px]:grid-cols-3">
