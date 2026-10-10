@@ -21,16 +21,27 @@ from app.core.errors import AppError
 from app.models import FactoryRun, StageEvent
 from app.services import iteration, testing
 
-MAX_TURNS = 6
-MAX_REPAIRS = 2
+MAX_TURNS = 8
+MAX_REPAIRS = 3
+# 合并前的硬上限。没有记下上限的历史检查点仍按这个数恢复，避免重测时追加调用。
+LEGACY_BUILDER_TURNS = 6
+LEGACY_MAX_REPAIRS = 2
+LEGACY_BUILDER_BUDGET_REASON = "开发与修复已达到每轮六次模型调用上限"
 MAX_TRUNCATION_RETRIES = 4
+MAX_EMPTY_READ_RETRIES = 2
 TRUNCATION_REASON = "模型输出被截断，文件没有写完整。请缩小需求，或先完成能运行的主路径后再重试。"
 TRUNCATION_GUIDE = (
-    "上一次输出被截断，工具参数不完整，没有写入任何文件，这次不计入六次调用上限。"
-    "请一次只调用 write_files 写一个文件，内容必须完整且不能为空。"
-    "先写可运行的主路径：app.py 提供页面和 POST /generate 的核心结果；requirements.txt 与 README.md 可以随后再写。"
-    "增强功能等主路径检查通过后再加，并控制单次输出长度，不要用空字符串占位。"
+    "上一次输出被截断，工具参数不完整，没有写入任何文件，这次不计入本轮调用上限。"
+    "请缩短内容后重试。app.py 单独用 write_files 写完整可运行主路径；"
+    "requirements.txt 与 README.md 较短，可以同一次 write_files 一起写。"
+    "增强功能等主路径检查通过后再加，不要用空字符串占位。"
 )
+EMPTY_READ_GUIDE = (
+    "初次构建没有父版本源码，磁盘上也没有可读取的文件。这次 read_file 不计入本轮调用上限。"
+    "不要再 read_file。请直接 write_files：先单独写可运行的 app.py 主路径，"
+    "requirements.txt 与 README.md 可以在另一次调用里一起写。"
+)
+BUDGET_PREFIX = "【本轮预算】"
 logger = logging.getLogger("factory.agent")
 ALLOWED_FILES = {"app.py", "requirements.txt", "README.md"}
 MAX_FILE_BYTES = 300_000
@@ -69,6 +80,7 @@ def _new_state() -> dict:
         "version": 1, "status": "running", "active_role": "builder", "repair_rounds": 0,
         "stop_reason": "", "tasks": [], "steps": [], "handoffs": [], "checks": [],
         "messages": {}, "turns": {}, "pending": None, "last_check": None,
+        "turn_cap": MAX_TURNS, "repair_cap": MAX_REPAIRS,
     }
 
 
@@ -76,16 +88,39 @@ def _task_id(role: str, round_number: int) -> str:
     return f"{role}:{round_number}"
 
 
+def _turn_cap(state: dict | None) -> int:
+    if not state or state.get("version") != 1:
+        return MAX_TURNS
+    recorded = state.get("turn_cap")
+    if isinstance(recorded, int) and 1 <= recorded <= 12:
+        return recorded
+    return LEGACY_BUILDER_TURNS
+
+
+def _repair_cap(state: dict | None) -> int:
+    if not state or state.get("version") != 1:
+        return MAX_REPAIRS
+    recorded = state.get("repair_cap")
+    if isinstance(recorded, int) and 0 <= recorded <= 6:
+        return recorded
+    return LEGACY_MAX_REPAIRS
+
+
+def _builder_budget_reason_for(state: dict) -> str:
+    return f"开发与修复已达到每轮{_turn_cap(state)}次模型调用上限"
+
+
 def _builder_budget_reason() -> str:
-    return "开发与修复已达到每轮六次模型调用上限"
+    return _builder_budget_reason_for({"version": 1, "turn_cap": MAX_TURNS})
 
 
-def _checked_builder_budget_ready(run: FactoryRun, state: dict) -> bool:
+def _checked_builder_budget_ready(run: FactoryRun, state: dict, *, expected_turns: int | None = None) -> bool:
     """只允许已完成真实检查的开发者在预算边界交接，不产生模型结论。"""
     round_number = state.get("repair_rounds", 0)
     task_id = _task_id("builder", round_number)
-    if (state.get("active_role") != "builder" or round_number > MAX_REPAIRS
-            or state.get("turns", {}).get(task_id) != MAX_TURNS or state.get("pending")):
+    cap_turns = _turn_cap(state) if expected_turns is None else expected_turns
+    if (state.get("active_role") != "builder" or round_number > _repair_cap(state)
+            or state.get("turns", {}).get(task_id) != cap_turns or state.get("pending")):
         return False
     task = next((item for item in state.get("tasks", []) if item.get("id") == task_id), None)
     if not task or task.get("role") != "builder" or task.get("round") != round_number:
@@ -116,24 +151,32 @@ def _checked_builder_budget_ready(run: FactoryRun, state: dict) -> bool:
 
 
 def can_recover_builder_budget(run: FactoryRun, state: dict | None = None) -> bool:
-    """识别旧执行器在检查通过后因缺少 handoff 调用而误报的唯一失败类型。"""
+    """识别检查已通过、只因缺少 handoff 而被预算文案判失败的检查点。"""
     state = load_state(run) if state is None else state
+    reason = state.get("stop_reason")
+    if not reason or run.failure_reason != reason:
+        return False
+    if reason == LEGACY_BUILDER_BUDGET_REASON:
+        expected_turns = LEGACY_BUILDER_TURNS
+    elif reason == _builder_budget_reason_for(state):
+        expected_turns = _turn_cap(state)
+    else:
+        return False
     return bool(
         getattr(run, "execution_mode", "workflow") == "agent_team"
         and run.current_stage == "gate_failed" and state.get("status") == "failed"
         and run.failure_code == "agent_execution_failed"
-        and run.failure_reason == state.get("stop_reason") == _builder_budget_reason()
-        and _checked_builder_budget_ready(run, state)
+        and _checked_builder_budget_ready(run, state, expected_turns=expected_turns)
     )
 
 
 def _can_resume(run: FactoryRun, state: dict) -> bool:
     if state.get("status") != "interrupted" or run.current_stage not in {"building", "testing"}:
         return False
-    if state.get("repair_rounds", 0) > MAX_REPAIRS:
+    if state.get("repair_rounds", 0) > _repair_cap(state):
         return False
     task_id = _task_id(state.get("active_role", "builder"), state.get("repair_rounds", 0))
-    return (bool(state.get("pending")) or state.get("turns", {}).get(task_id, 0) < MAX_TURNS
+    return (bool(state.get("pending")) or state.get("turns", {}).get(task_id, 0) < _turn_cap(state)
             or _checked_builder_budget_ready(run, state))
 
 
@@ -150,7 +193,7 @@ def execution_view(run: FactoryRun) -> dict:
     result = {
         "run_id": run.id, "execution_mode": mode, "status": state.get("status", "pending" if mode == "agent_team" else "not_enabled"),
         "active_role": state.get("active_role"),
-        "limits": {"max_turns_per_agent": MAX_TURNS, "max_repair_rounds": MAX_REPAIRS},
+        "limits": {"max_turns_per_agent": _turn_cap(state), "max_repair_rounds": _repair_cap(state)},
         "repair_rounds": state.get("repair_rounds", 0), "resumable": _can_resume(run, state),
         "stop_reason": state.get("stop_reason", ""),
     }
@@ -270,10 +313,10 @@ def role_tools(role: str) -> list[dict]:
     tools = [
         _tool("read_file", "读取当前产物中的一个源文件", {"path": {"type": "string", "enum": sorted(ALLOWED_FILES)}}, ["path"]),
         _tool("run_checks", "真实运行语法、产物护栏、受限导入、HTTP主路径检查；不代表人工业务验收", {}, []),
-        _tool("handoff", "开发者交给验证者；验证者交回开发者修复（最多两轮）", {"reason": {"type": "string"}}, ["reason"]),
+        _tool("handoff", "开发者交给验证者；验证者交回开发者修复，修复轮数有硬上限", {"reason": {"type": "string"}}, ["reason"]),
     ]
     if role == "builder":
-        tools.append(_tool("write_files", "一次提交一个白名单文件的完整非空内容。多个大文件请分开调用，避免输出被截断；禁止空字符串", {"files": {
+        tools.append(_tool("write_files", "提交完整非空内容。app.py 单独提交；requirements.txt 与 README.md 可以同一次提交。不要一次提交多个大文件，禁止空字符串", {"files": {
             "type": "object", "properties": {name: {"type": "string"} for name in sorted(ALLOWED_FILES)},
             "additionalProperties": False,
         }}, ["files"]))
@@ -293,6 +336,11 @@ def _context(run: FactoryRun, prd: dict, state: dict) -> dict:
         "last_check": state.get("last_check"),
         "files": read_files(run.id),
         "automatic_checks_only": True,
+        "build_contract": {
+            "files": ["app.py", "requirements.txt", "README.md"],
+            "order": "没有父版本源码且 files 为空时不要 read_file。先单独写短的 app.py 主路径，再把 requirements.txt 与 README.md 放在同一次 write_files。写完立刻 run_checks，通过后再 handoff。",
+            "scope": "只保证页面和 POST /generate 主路径可运行。付费、海报、分享、账号用简化实现或省略，app.py 必须短到一次输出能写完。",
+        },
     }
 
 
@@ -355,7 +403,7 @@ def _handoff(state: dict, task: dict, reason: str) -> None:
 def _handoff_checked_builder_budget(session: Session, run: FactoryRun, state: dict, task: dict) -> bool:
     if not _checked_builder_budget_ready(run, state):
         return False
-    reason = "执行器自动交接：六次模型调用已用完，当前源码真实检查已通过；继续独立验证，未生成模型结论"
+    reason = f"执行器自动交接：{_turn_cap(state)}次模型调用已用完，当前源码真实检查已通过；继续独立验证，未生成模型结论"
     step = _step(state, task, "budget_handoff")
     step.update(status="completed", summary=reason)
     _handoff(state, task, reason)
@@ -394,7 +442,7 @@ def _execute_tool(session: Session, run: FactoryRun, state: dict, task: dict, st
             raise ValueError("文件必须为文本且不超过 300KB")
         blank = sorted(name for name, content in files.items() if not content.strip())
         if blank:
-            raise ValueError("拒绝写入空文件：" + "、".join(blank) + "。请一次只写一个文件，并提交完整非空内容")
+            raise ValueError("拒绝写入空文件：" + "、".join(blank) + "。请提交完整非空内容")
         # 先验证全部路径，再写入；每个文件以 replace 提交。中断时可幂等重放同一调用。
         paths = {name: _path(run.id, name) for name in files}
         for name, path in paths.items():
@@ -444,8 +492,11 @@ def _execute_tool(session: Session, run: FactoryRun, state: dict, task: dict, st
         step["summary"] = state["stop_reason"]
         return {"completed": True, "business_acceptance": "pending_human"}
     # verifier 的否定结论或明确交回都会消耗一轮修复；不允许无限重开任务。
-    if state["repair_rounds"] >= MAX_REPAIRS:
-        state["status"], state["stop_reason"] = "failed", "已达到两轮自动修复上限"
+    repair_cap = _repair_cap(state)
+    if state["repair_rounds"] >= repair_cap:
+        state["status"], state["stop_reason"] = "failed", (
+            f"已达到{repair_cap}轮自动修复上限。下一步：查看协作记录里的检查报错，收窄需求或创建修改版本，不要原样重跑。"
+        )
         task.update(status="failed", finished_at=_now(), output_summary=state["stop_reason"])
         step["summary"] = state["stop_reason"]
         return {"failed": True, "reason": state["stop_reason"]}
@@ -467,6 +518,205 @@ def _blank_write(arguments: object) -> bool:
     if not isinstance(files, dict) or not files:
         return False
     return all(isinstance(content, str) and not content.strip() for content in files.values())
+
+
+def _safe_source_hash(run_id: str) -> str | None:
+    try:
+        return source_hash(run_id)
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+
+def _disk_has_code(run_id: str) -> bool:
+    try:
+        return any(text.strip() for text in read_files(run_id).values())
+    except (OSError, UnicodeError, ValueError):
+        return False
+
+
+def _parent_has_code(run: FactoryRun) -> bool:
+    parent = iteration.json_dict(getattr(run, "parent_context", "{}"))
+    files = parent.get("files") if isinstance(parent, dict) else None
+    if not isinstance(files, dict):
+        return False
+    return any(isinstance(value, str) and value.strip() for value in files.values())
+
+
+def _fresh_build(run: FactoryRun, state: dict) -> bool:
+    return (
+        state.get("repair_rounds", 0) == 0
+        and state.get("active_role", "builder") == "builder"
+        and not _parent_has_code(run)
+        and not _disk_has_code(run.id)
+    )
+
+
+def _budget_note(run: FactoryRun, state: dict, task: dict) -> str:
+    cap = _turn_cap(state)
+    used = state.get("turns", {}).get(task["id"], 0)
+    remaining = max(0, cap - used)
+    if task["role"] == "builder":
+        lead = (
+            "当前没有父版本源码，也没有已写入文件，不要 read_file。"
+            if _fresh_build(run, state)
+            else "已有源码时先看验证反馈和最近一次检查，再改必须改的部分。"
+        )
+        order = (
+            "推荐顺序：单独 write_files 写短的 app.py 主路径；"
+            "requirements.txt 与 README.md 放在同一次 write_files；"
+            "写完立刻 run_checks；只按检查报错修；通过后 handoff。"
+        )
+    else:
+        lead = ""
+        order = "推荐顺序：read_file 查看源码，run_checks 取得真实结果，再 conclude 或 handoff。"
+    return (
+        f"{BUDGET_PREFIX}本轮已用 {used} 次，还剩 {remaining} 次（硬上限 {cap} 次，用完不再调用模型）。"
+        f"修复硬上限 {_repair_cap(state)} 轮。{lead}{order}"
+        "付费、海报、分享和账号用简化实现或省略，app.py 要能一次写完。"
+    )
+
+
+def _sync_budget_note(messages: list, note: str) -> None:
+    kept = [
+        item for item in messages
+        if not (item.get("role") == "user" and str(item.get("content") or "").startswith(BUDGET_PREFIX))
+    ]
+    messages[:] = kept
+    messages.append({"role": "user", "content": note})
+
+
+def _only_unread_initial_files(run: FactoryRun, calls: list) -> bool:
+    if not calls:
+        return False
+    for call in calls:
+        if not isinstance(call, dict) or call.get("name") != "read_file":
+            return False
+        args = call.get("arguments")
+        if not isinstance(args, dict) or set(args) != {"path"} or not isinstance(args.get("path"), str):
+            return False
+        name = args["path"]
+        if name not in ALLOWED_FILES:
+            return False
+        try:
+            path = _path(run.id, name)
+        except ValueError:
+            return False
+        if path.is_file() and path.read_text(encoding="utf-8").strip():
+            return False
+    return True
+
+
+def _exhausted_public_reason(state: dict, task: dict, run: FactoryRun) -> str:
+    base = f"{task['title']}已达到每轮{_turn_cap(state)}次模型调用上限"
+    if task["role"] == "builder" and not _disk_has_code(run.id):
+        return base + "。磁盘上还没有可检查的源码，因此没有进入自动检查。下一步：把需求收成单个页面能完成的主路径后整段重跑。"
+    if task["role"] == "builder":
+        return base + "。下一步：查看协作记录中的检查结果；若要继续改，请创建修改版本。"
+    return base + "。验证没有在上限内给出基于真实检查的结论。下一步：查看协作记录，或创建修改版本后重新验证。"
+
+
+def _record_executor_check(session: Session, run: FactoryRun, state: dict, task: dict, prd: dict) -> dict:
+    step = _step(state, task, "run_checks")
+    started = time.monotonic()
+    try:
+        result = _execute_tool(session, run, state, task, step, {"name": "run_checks", "arguments": {}}, prd)
+        step["status"] = "completed"
+    except (ValueError, UnicodeError) as exc:
+        result = {"passed": False, "diagnosis": _public_text(exc, 1200)}
+        step.update(status="failed", summary=_public_text(exc))
+    step["summary"] = "执行器自动检查：" + (step.get("summary") or "已完成")
+    step["duration_ms"] = round((time.monotonic() - started) * 1000)
+    _persist(session, run, state, step["summary"])
+    return result
+
+
+def _handoff_passed_check(session: Session, run: FactoryRun, state: dict, task: dict) -> bool:
+    if _handoff_checked_builder_budget(session, run, state, task):
+        return True
+    checked = state.get("last_check") or {}
+    if checked.get("passed") is not True or checked.get("role") != "builder" or checked.get("round") != task.get("round"):
+        return False
+    if checked.get("source_hash") != _safe_source_hash(run.id):
+        return False
+    steps = state.get("steps", [])
+    check_index = next((index for index, step in enumerate(steps) if step.get("id") == checked.get("id")), None)
+    if check_index is None or any(step.get("status") != "completed" for step in steps[check_index:]):
+        return False
+    names = set(read_files(run.id))
+    if not {"app.py", "requirements.txt"} <= names:
+        return False
+    reason = f"执行器自动交接：{_turn_cap(state)}次模型调用已用完，当前源码真实检查已通过；继续独立验证，未生成模型结论"
+    step = _step(state, task, "budget_handoff")
+    step.update(status="completed", summary=reason)
+    _handoff(state, task, reason)
+    _persist(session, run, state, reason)
+    return True
+
+
+def _begin_budget_repair(session: Session, run: FactoryRun, state: dict, task: dict, diagnosis: str) -> bool:
+    diagnosis = _public_text(diagnosis or "自动检查未通过", 1200)
+    repair_cap = _repair_cap(state)
+    if state["repair_rounds"] >= repair_cap:
+        _fail(
+            session, run, state,
+            f"自动检查未通过，且已达到{repair_cap}轮修复上限。"
+            "下一步：按报错收窄需求或创建修改版本，不要原样重跑。"
+            f"最近一次检查报错：{diagnosis}",
+        )
+        return False
+    feedback = (
+        "本轮模型调用已用完。执行器对当前磁盘源码运行了真实自动检查，没有通过。"
+        "请只根据检查报错修复主路径，保留已有可运行部分，不要重写无关功能。真实检查诊断："
+        + diagnosis
+    )
+    step = _step(state, task, "budget_repair")
+    summary = _public_text("自动检查未通过，进入修复轮：" + diagnosis, 360)
+    step.update(status="completed", summary=summary)
+    state["handoffs"].append({
+        "id": uuid.uuid4().hex, "from_role": "builder", "to_role": "builder", "round": state["repair_rounds"],
+        "reason": summary, "created_at": _now(),
+    })
+    state["repair_feedback"] = _public_text(feedback, 1500)
+    state["repair_rounds"] += 1
+    task.update(status="completed", finished_at=_now(), output_summary=summary)
+    state["active_role"] = "builder"
+    _persist(session, run, state, summary)
+    return True
+
+
+def _settle_builder_budget(session: Session, run: FactoryRun, state: dict, task: dict, prd: dict) -> bool:
+    """预算用尽后：已通过则交接；有源码则先真实检查，失败进入修复轮。"""
+    if task.get("role") != "builder":
+        return False
+    if _handoff_checked_builder_budget(session, run, state, task):
+        return True
+    # 检查已通过且满足交接条件，但交接没有发生。保持原失败，供历史重测恢复。
+    if _checked_builder_budget_ready(run, state):
+        return False
+    if not _disk_has_code(run.id):
+        return False
+    checked = state.get("last_check") or {}
+    current_hash = _safe_source_hash(run.id)
+    same_source = (
+        checked.get("role") == "builder"
+        and checked.get("round") == task.get("round")
+        and current_hash is not None
+        and checked.get("source_hash") == current_hash
+    )
+    if same_source and checked.get("passed") is True:
+        if _handoff_passed_check(session, run, state, task):
+            return True
+    elif same_source and checked.get("passed") is False:
+        return _begin_budget_repair(
+            session, run, state, task, checked.get("diagnosis") or checked.get("summary") or "自动检查未通过",
+        )
+    result = _record_executor_check(session, run, state, task, prd)
+    if state.get("status") != "running":
+        return False
+    if result.get("passed") is True and _handoff_passed_check(session, run, state, task):
+        return True
+    diagnosis = result.get("diagnosis") or (state.get("last_check") or {}).get("diagnosis") or "自动检查未通过"
+    return _begin_budget_repair(session, run, state, task, diagnosis)
 
 
 def _response_truncated(response: object) -> bool:
@@ -534,19 +784,24 @@ def execute(session: Session, run: FactoryRun, client, prd: dict) -> bool:
                 _persist(session, run, state, step["summary"])
                 continue
             used = state["turns"].get(task["id"], 0)
-            if used >= MAX_TURNS:
-                if _handoff_checked_builder_budget(session, run, state, task):
+            if used >= _turn_cap(state):
+                if task["role"] == "builder" and _settle_builder_budget(session, run, state, task, prd):
                     continue
-                return _fail(session, run, state, f"{task['title']}已达到每轮六次模型调用上限")
+                if state["status"] == "failed":
+                    return False
+                if task["role"] == "builder" and _checked_builder_budget_ready(run, state):
+                    return _fail(session, run, state, _builder_budget_reason_for(state))
+                return _fail(session, run, state, _exhausted_public_reason(state, task, run))
             prior_model_calls = sum(
                 1 for item in state["steps"]
                 if item.get("task_id") == task["id"] and item.get("tool") == "model_call"
             )
-            if prior_model_calls >= MAX_TURNS + MAX_TRUNCATION_RETRIES:
-                capped = TRUNCATION_REASON if state.get("truncation_retries", {}).get(task["id"], 0) else f"{task['title']}已达到每轮六次模型调用上限"
+            if prior_model_calls >= _turn_cap(state) + MAX_TRUNCATION_RETRIES + MAX_EMPTY_READ_RETRIES:
+                capped = TRUNCATION_REASON if state.get("truncation_retries", {}).get(task["id"], 0) else _exhausted_public_reason(state, task, run)
                 return _fail(session, run, state, capped)
             state["turns"][task["id"]] = used + 1
             step = _step(state, task, "model_call")
+            _sync_budget_note(messages, _budget_note(run, state, task))
             _persist(session, run, state)  # 在网络请求前消耗预算，进程中断也不会清零。
             started = time.monotonic()
             before_input, before_output = getattr(client, "prompt_tokens", 0), getattr(client, "completion_tokens", 0)
@@ -585,6 +840,15 @@ def execute(session: Session, run: FactoryRun, client, prd: dict) -> bool:
                 messages.append({"role": "user", "content": "必须使用声明的工具；每次最多3项调用，交接或结论仅能出现在最后。请重试，预算不会重置。"})
                 _persist(session, run, state, step["summary"])
                 continue
+            if task["role"] == "builder" and _fresh_build(run, state) and _only_unread_initial_files(run, calls):
+                retries = state.setdefault("empty_read_retries", {}).get(task["id"], 0) + 1
+                state["empty_read_retries"][task["id"]] = retries
+                if retries <= MAX_EMPTY_READ_RETRIES:
+                    state["turns"][task["id"]] = used
+                    step.update(status="failed", summary="初次构建没有已有源码，读取空文件不计入调用上限")
+                    messages.append({"role": "user", "content": EMPTY_READ_GUIDE})
+                    _persist(session, run, state, step["summary"])
+                    continue
             messages.append({"role": "assistant", "content": None, "tool_calls": [
                 {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": iteration.dump(c.get("arguments"))}} for c in calls
             ]})

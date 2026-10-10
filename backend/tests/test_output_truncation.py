@@ -97,8 +97,9 @@ def test_large_requirement_truncation_does_not_exhaust_turn_budget(session, capl
     assert "塔罗" in client.seen[0]["context"]["idea"]
     guides = [item for item in state["messages"]["builder:0"] if item.get("role") == "user" and "截断" in item.get("content", "")]
     assert len(guides) == harness.MAX_TRUNCATION_RETRIES
-    assert "一次只调用 write_files" in guides[-1]["content"]
-    assert "一个文件" in state["messages"]["builder:0"][0]["content"]
+    assert "不计入本轮调用上限" in guides[-1]["content"]
+    assert "app.py 单独" in guides[-1]["content"]
+    assert "不要调用 read_file" in state["messages"]["builder:0"][0]["content"]
     assert not any(item.get("role") == "assistant" for item in state["messages"]["builder:0"])
     assert "模型输出被截断" in caplog.text
     assert harness.execution_view(run)["stop_reason"].startswith("模型输出被截断")
@@ -129,7 +130,8 @@ def test_blank_files_are_rejected_and_still_consume_a_real_turn(session):
     state = harness.load_state(run)
     assert state["turns"]["builder:0"] == harness.MAX_TURNS
     assert "模型输出被截断" not in (run.failure_reason or "")
-    assert "六次模型调用上限" in (run.failure_reason or "")
+    assert f"每轮{harness.MAX_TURNS}次模型调用上限" in (run.failure_reason or "")
+    assert "还没有可检查的源码" in (run.failure_reason or "")
     assert harness.read_files(run.id) == {}
     assert any("拒绝写入空文件" in (item.get("content") or "") for item in client.seen[-1] if item.get("role") == "tool")
 
@@ -169,7 +171,7 @@ def test_one_truncated_call_is_refunded_before_a_complete_write(session):
     assert state["truncation_retries"]["builder:0"] == 1
     assert client.calls.count("builder") == 4
     assert harness.read_files(run.id)["app.py"] == SAFE_APP
-    assert any("一次只调用 write_files" in (item.get("content") or "") for item in state["messages"]["builder:0"])
+    assert any("不计入本轮调用上限" in (item.get("content") or "") for item in state["messages"]["builder:0"])
 
 
 def test_length_limited_tool_arguments_are_logged_without_body(caplog):

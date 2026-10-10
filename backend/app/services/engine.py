@@ -501,7 +501,7 @@ def _retest_run_locked(run_id: str) -> None:
             run.execution_state = iteration.dump(state)
             session.add(StageEvent(
                 run_id=run.id, stage=Stage.BUILDING.value, event_type="agent_execution",
-                payload="恢复已通过检查的开发检查点；六次调用预算保持不变，仍须独立验证与人工验收",
+                payload="恢复已通过检查的开发检查点；本轮调用预算保持不变，仍须独立验证与人工验收",
             ))
             _transition(session, run, Stage.BUILDING)
         else:

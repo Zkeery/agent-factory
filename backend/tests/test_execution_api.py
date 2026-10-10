@@ -31,7 +31,7 @@ def test_execution_view_ownership_and_private_fields(client, session):
     response = client.get(f"/api/v1/runs/{mine.id}/execution")
     assert response.status_code == 200
     view = response.json()
-    assert view["limits"] == {"max_turns_per_agent": 6, "max_repair_rounds": 2}
+    assert view["limits"] == {"max_turns_per_agent": harness.MAX_TURNS, "max_repair_rounds": harness.MAX_REPAIRS}
     assert view["resumable"]
     assert all(isinstance(view[k], list) for k in ("tasks", "steps", "checks", "handoffs"))
     assert "PRIVATE_" not in response.text and "messages" not in response.text and "raw_source" not in response.text
@@ -55,7 +55,7 @@ def test_resume_claims_checkpoint_once_without_budget_reset(client, session, mon
 
 @pytest.mark.parametrize("options", [
     {"state_status": "failed"}, {"state_status": "cancelled"}, {"state_status": "completed"},
-    {"mode": "workflow"}, {"stage": "awaiting_prd_confirm"}, {"turns": 6}, {"confirmed": False},
+    {"mode": "workflow"}, {"stage": "awaiting_prd_confirm"}, {"turns": harness.MAX_TURNS}, {"confirmed": False},
 ])
 def test_resume_does_not_bypass_budget_terminal_or_human_gate(client, session, monkeypatch, options):
     run = stored_run(session, session.query(User).first().id, **options)
