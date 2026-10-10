@@ -186,7 +186,6 @@ def create_run(body: CreateRunRequest, session: Session = Depends(get_session), 
     return _run_out(session, run)
 
 
-@router.get("/runs", response_model=RunListOut)
 def _run_summary(run: FactoryRun) -> RunSummary:
     return RunSummary(
         id=run.id, idea=run.idea, current_stage=run.current_stage, status=run.status, created_at=run.created_at,
@@ -195,6 +194,7 @@ def _run_summary(run: FactoryRun) -> RunSummary:
     )
 
 
+@router.get("/runs", response_model=RunListOut)
 def list_runs(session: Session = Depends(get_session), user: User = Depends(get_current_user)):
     runs = session.query(FactoryRun).filter(
         FactoryRun.user_id == user.id, active_run_filter(), visible_version_filter(),

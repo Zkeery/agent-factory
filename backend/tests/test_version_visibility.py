@@ -93,49 +93,87 @@ def test_backfill_hides_only_retried_failures_and_keeps_numbers(session):
 
 @pytest.mark.parametrize("stage", ["failed", "gate_failed"])
 def test_retry_hides_replaced_failure_and_keeps_lineage(client, stage):
-    created = client.post("/api/v1/runs", json={"idea": "需要整段重跑的记账工具"}).json()
-    parent_id = created["id"]
-    project_id = created["project_id"]
-    wait_stage(client, parent_id, "awaiting_answers")
-    mark_stage(parent_id, "awaiting_acceptance")
-    revised = client.post(
-        f"/api/v1/runs/{parent_id}/revise",
-        json={"change_request": "保留现有记账，修正余额", "request_id": f"revise-{stage}"},
-    )
-    assert revised.status_code == 201, revised.text
-    child_id = revised.json()["id"]
-    wait_stage(client, child_id, "awaiting_answers")
-    mark_stage(child_id, stage)
+    kept = client.post("/api/v1/runs", json={"idea": "仍要留在列表里的版本"}).json()
+    project_id = kept["project_id"]
+    wait_stage(client, kept["id"], "awaiting_answers")
+    created = client.post("/api/v1/runs", json={"idea": "需要整段重跑的记账工具", "project_id": project_id}).json()
+    wait_stage(client, created["id"], "awaiting_answers")
+    session = SessionLocal()
+    try:
+        failed = session.get(FactoryRun, created["id"])
+        failed.parent_run_id = kept["id"]
+        failed.change_request = "保留现有记账，修正余额"
+        session.commit()
+        failed_version = failed.version_no
+    finally:
+        session.close()
+    mark_stage(created["id"], stage)
 
-    retried = client.post(f"/api/v1/runs/{child_id}/retry")
+    retried = client.post(f"/api/v1/runs/{created['id']}/retry")
     assert retried.status_code == 201, retried.text
     new = retried.json()
-    hidden = client.get(f"/api/v1/runs/{child_id}")
+    hidden = client.get(f"/api/v1/runs/{created['id']}")
     assert hidden.status_code == 200
     body = hidden.json()
     assert body["superseded_by_run_id"] == new["id"]
-    assert body["parent_run_id"] == parent_id
-    assert new["parent_run_id"] == parent_id
-    assert new["version_no"] == body["version_no"] + 1
-    assert new["version_no"] != body["version_no"]
+    assert body["parent_run_id"] == kept["id"]
+    assert body["change_request"] == "保留现有记账，修正余额"
+    assert new["parent_run_id"] == kept["id"]
+    assert new["change_request"] == "保留现有记账，修正余额"
+    assert new["version_no"] == failed_version + 1
+    assert new["version_no"] != failed_version
 
     visible = listed_ids(client)
-    assert parent_id in visible
+    assert kept["id"] in visible
     assert new["id"] in visible
-    assert child_id not in visible
+    assert created["id"] not in visible
     project_runs = [item["id"] for item in client.get(f"/api/v1/projects/{project_id}/runs").json()["runs"]]
-    assert child_id not in project_runs
-    assert client.get("/api/v1/projects").json()["projects"][0]["run_count"] == 2
+    assert created["id"] not in project_runs
+    projects = client.get("/api/v1/projects").json()["projects"]
+    assert next(item for item in projects if item["id"] == project_id)["run_count"] == 2
 
     session = SessionLocal()
     try:
-        user_id = session.get(FactoryRun, parent_id).user_id
+        user_id = session.get(FactoryRun, kept["id"]).user_id
         assert metrics.summarize(session, user_id)["total_runs"] == 3
         review = insights.build_review(session, user_id, source="all")
         assert review["counts"]["total"] == 3
         assert review["counts"]["failed"] >= 1
     finally:
         session.close()
+
+
+def test_revise_does_not_hide_parent(client):
+    created = client.post("/api/v1/runs", json={"idea": "已有成品后再修改"}).json()
+    run_id = created["id"]
+    wait_stage(client, run_id, "awaiting_answers")
+    code_dir = DATA_ROOT / "code" / run_id
+    code_dir.mkdir(parents=True, exist_ok=True)
+    (code_dir / "app.py").write_text(APP_SOURCE, encoding="utf-8")
+    (code_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (code_dir / "README.md").write_text("本地运行说明\n", encoding="utf-8")
+    session = SessionLocal()
+    try:
+        run = session.get(FactoryRun, run_id)
+        run.current_stage = "awaiting_acceptance"
+        run.status = "waiting"
+        run.prd_snapshot = '{"goal":"记账"}'
+        parent_version = run.version_no
+        session.commit()
+    finally:
+        session.close()
+    revised = client.post(
+        f"/api/v1/runs/{run_id}/revise",
+        json={"change_request": "保留现有记账，修正余额", "request_id": "revise-keeps-parent"},
+    )
+    assert revised.status_code == 201, revised.text
+    child = revised.json()
+    parent = client.get(f"/api/v1/runs/{run_id}").json()
+    assert parent["superseded_by_run_id"] is None
+    assert child["parent_run_id"] == run_id
+    assert child["version_no"] == parent_version + 1
+    assert run_id in listed_ids(client)
+    assert child["id"] in listed_ids(client)
 
 
 def test_cancelled_retry_retest_and_schedule_stay_visible(client):
