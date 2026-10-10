@@ -12,6 +12,7 @@ import {
   summarizeAppStatus,
   summarizeDecisionLedger,
   pmFailureText,
+  scheduleBlockedHint,
   Artifact,
   Decision,
   Run,
@@ -28,6 +29,19 @@ describe("失败人话 pmFailureText", () => {
     expect(pmFailureText("").message).toBe("这次没做成功");
     expect(pmFailureText(null).message).toBe("这次没做成功");
     expect(pmFailureText("unknown_xyz").message).toBe("这次没做成功");
+  });
+
+  it("输出被截断时直接说明原因", () => {
+    const text = pmFailureText("agent_execution_failed", "模型输出被截断，文件没有写完整。请缩小需求，或先完成能运行的主路径后再重试。");
+    expect(text.message).toBe("模型输出被截断");
+    expect(text.suggestion).toContain("主路径");
+  });
+});
+
+describe("定时任务未完成提示", () => {
+  it("等待回答时说明到点不会再新建", () => {
+    expect(scheduleBlockedHint("awaiting_answers")).toBe("已有未完成的运行（等待回答），到点不会再新建");
+    expect(scheduleBlockedHint(null)).toBeNull();
   });
 });
 

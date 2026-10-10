@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.models import FactoryRun, ProductProject, Schedule, SessionLocal, init_db
-from app.services.stages import Stage
+from app.services.stages import TERMINAL_STAGES, Stage
 
 logger = logging.getLogger("factory.scheduler")
 
@@ -17,6 +17,39 @@ SCAN_INTERVAL = 30  # 秒
 
 def _local_now() -> datetime:
     return datetime.now().astimezone()
+
+
+def _as_server_local(value: datetime) -> datetime:
+    """触发记录按 UTC 保存，是否同一天要换算到服务器当地日期。"""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(_local_now().tzinfo)
+
+
+def _handled_today(schedule: Schedule, today) -> bool:
+    for stamp in (schedule.last_run_at, schedule.last_skipped_at):
+        if stamp is not None and _as_server_local(stamp).date() == today:
+            return True
+    return False
+
+
+def _blocking_run(session, schedule_id: str) -> FactoryRun | None:
+    terminal = [stage.value for stage in TERMINAL_STAGES]
+    return (
+        session.query(FactoryRun)
+        .filter(FactoryRun.auto_schedule_id == schedule_id, FactoryRun.current_stage.not_in(terminal))
+        .order_by(FactoryRun.created_at.desc())
+        .first()
+    )
+
+
+def _skip_reason(stage: str) -> str:
+    labels = {
+        "awaiting_answers": "上一次仍在等待回答",
+        "awaiting_prd_confirm": "上一次仍在等待确认需求",
+        "awaiting_acceptance": "上一次仍在等待验收",
+    }
+    return labels.get(stage, "上一次运行尚未完成")
 
 
 def _fire(schedule: Schedule, session) -> FactoryRun | None:
@@ -55,17 +88,27 @@ def check_due_schedules() -> int:
         for s in schedules:
             if s.trigger_time != hhmm:
                 continue
-            if s.last_run_at is not None:
-                last = s.last_run_at
-                if last.tzinfo is None:
-                    last = last.replace(tzinfo=timezone.utc)
-                if last.astimezone().date() == today:
+            if _handled_today(s, today):
+                continue
+            if s.project_id:
+                project = session.get(ProductProject, s.project_id)
+                if project is not None and project.deleted_at is not None:
+                    s.enabled = False
+                    session.commit()
                     continue
+            blocking = _blocking_run(session, s.id)
+            if blocking is not None:
+                s.last_skipped_at = _local_now().astimezone(timezone.utc)
+                s.last_skip_reason = _skip_reason(blocking.current_stage)
+                session.commit()
+                logger.info("定时任务跳过 schedule=%s stage=%s", s.id, blocking.current_stage)
+                continue
             run = _fire(s, session)
             if run is None:
                 session.commit()
                 continue
-            s.last_run_at = datetime.now(timezone.utc)
+            s.last_run_at = _local_now().astimezone(timezone.utc)
+            s.last_skip_reason = ""
             session.commit()
             engine.start_run_async(run.id)
             logger.info("定时任务触发 schedule=%s idea=%.20s", s.id, s.idea)
