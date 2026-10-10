@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowRight, CheckCircle2, ChevronDown, Clock3, GitBranch, ListChecks, Loader2, Play, RefreshCw, Wrench } from "lucide-react";
 import { agentRoleLabel, executionModeLabel, formatInsightDuration, getRunExecution, resumeExecution, type RunExecution } from "@/lib/agentInsights";
+import { formatApiTime } from "@/lib/dateTime";
 
 interface ExecutionPanelProps {
   runId: string;
@@ -30,8 +31,8 @@ function StatusBadge({ status }: { status: string }) {
 
 function timeLabel(value: string | null): string {
   if (!value) return "时间未记录";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "时间未记录" : date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const text = formatApiTime(value);
+  return text === "—" ? "时间未记录" : text;
 }
 
 function roundLabel(round: number): string { return round === 0 ? "初始轮" : `修复第 ${round} 轮`; }

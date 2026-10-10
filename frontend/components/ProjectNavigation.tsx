@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { FolderOpen, GitBranch, RotateCcw, Search, Trash2 } from "lucide-react";
+import { formatApiDateTime } from "@/lib/dateTime";
 import { pmStageLabel, STAGE_CN, type Project, type Run, type RunSummary, type ViewRole } from "@/lib/factory";
 import { matchesProject, projectEntries, sortProjectVersions } from "@/lib/projectNavigation";
 import { cn } from "@/lib/utils";
@@ -79,7 +80,7 @@ export function ProjectVersionPicker({ run, runs, busy, role, onSelect }: {
       {!currentListed && <option value={run.id}>当前版本</option>}
       {[...versions].reverse().map((version, index) => {
         const stage = version.id === run.id ? run.current_stage : version.current_stage;
-        return <option key={version.id} value={version.id}>V{versions.length - index} · {version.parent_run_id ? "修改版" : "初版"}{index === 0 ? " · 最新" : ""}{version.auto_schedule_id ? " · 自动" : ""} · {new Date(version.created_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} · {role === "pm" ? pmStageLabel(stage) : STAGE_CN[stage]}</option>;
+        return <option key={version.id} value={version.id}>V{versions.length - index} · {version.parent_run_id ? "修改版" : "初版"}{index === 0 ? " · 最新" : ""}{version.auto_schedule_id ? " · 自动" : ""} · {formatApiDateTime(version.created_at)} · {role === "pm" ? pmStageLabel(stage) : STAGE_CN[stage]}</option>;
       })}
     </select>
   </div>;

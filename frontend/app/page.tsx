@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, ArrowRight, BarChart3, GitBranch, Plus, Layers3, FolderOpen, Clock3, LogOut, ChevronRight, PanelRight, Menu, X } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { formatApiDate, formatApiDateTime } from "@/lib/dateTime";
 import {
   acceptRun,
   rejectRun,
@@ -32,6 +33,7 @@ import {
   PM_STAGE_ORDER,
   pmStageLabel,
   pmFailureText,
+  scheduleBlockedHint,
   Project,
   RunSummary,
   Schedule,
@@ -217,25 +219,31 @@ function TaskList({
             {scheduleError && <p role="alert" className="text-[11px] text-red-600">{scheduleError}</p>}
           </div>
         )}
-        <p className="mt-2 text-[10px] leading-relaxed text-muted">到点后自动运行，项目列表会自动更新。</p>
+        <p className="mt-2 text-[10px] leading-relaxed text-muted">到点后按服务器当地时间自动运行。上一次还在等待回答或尚未完成时，不会重复新建。</p>
         {schedules.length > 0 && (
-          <div className="mt-2 space-y-1">
-            {schedules.map((s) => (
-              <div key={s.id} className="flex items-center gap-1.5 text-xs">
-                <span className="min-w-0 flex-1 truncate" style={{ color: s.enabled ? "var(--ink)" : "var(--color-muted)" }}>{s.idea}</span>
-                <span style={{ color: "var(--color-muted)" }}>{s.trigger_time}</span>
-                <label className="flex items-center gap-1" style={{ color: s.enabled ? "var(--ok)" : "var(--color-muted)" }}>
-                  <input
-                    type="checkbox"
-                    className="mt-0.5"
-                    checked={s.enabled}
-                    onChange={() => onToggleSchedule(s)}
-                  />
-                  {s.enabled ? "已开启" : "已关闭"}
-                </label>
-                <button className="rounded-full border px-2 py-0.5" style={{ borderColor: "var(--color-line)", color: "var(--color-muted)" }} onClick={() => onDeleteSchedule(s.id)}>删</button>
+          <div className="mt-2 space-y-2">
+            {schedules.map((s) => {
+              const blocked = scheduleBlockedHint(s.pending_run_stage);
+              return (
+              <div key={s.id} className="text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="min-w-0 flex-1 truncate" style={{ color: s.enabled ? "var(--ink)" : "var(--color-muted)" }}>{s.idea}</span>
+                  <span title="服务器当地时间" style={{ color: "var(--color-muted)" }}>{s.trigger_time}</span>
+                  <label className="flex items-center gap-1" style={{ color: s.enabled ? "var(--ok)" : "var(--color-muted)" }}>
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={s.enabled}
+                      onChange={() => onToggleSchedule(s)}
+                    />
+                    {s.enabled ? "已开启" : "已关闭"}
+                  </label>
+                  <button className="rounded-full border px-2 py-0.5" style={{ borderColor: "var(--color-line)", color: "var(--color-muted)" }} onClick={() => onDeleteSchedule(s.id)}>删</button>
+                </div>
+                {blocked && <div className="mt-1 text-[10px] leading-relaxed text-muted">{blocked}{s.last_skipped_at ? ` · 上次跳过 ${formatApiDateTime(s.last_skipped_at)}` : ""}{s.pending_run_id ? <button type="button" className="ml-1 text-brand" onClick={() => onSelect(s.pending_run_id!)}>查看</button> : null}</div>}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -1783,7 +1791,7 @@ export default function Page() {
             <div className="conversation-content mx-auto max-w-[980px] space-y-5 px-5 py-7 md:px-7">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 grow basis-[260px]">
-                  <div className="mb-2 flex items-center gap-2 text-[11px] text-muted"><span className="status-badge">{run.parent_run_id ? "修改版" : "初版"}</span><span>{runList.find((item) => item.id === run.id)?.created_at ? new Date(runList.find((item) => item.id === run.id)!.created_at).toLocaleDateString("zh-CN") : "当前项目"}</span><span>·</span><span>{pmStageLabel(run.current_stage)}</span></div>
+                  <div className="mb-2 flex items-center gap-2 text-[11px] text-muted"><span className="status-badge">{run.parent_run_id ? "修改版" : "初版"}</span><span>{runList.find((item) => item.id === run.id)?.created_at ? formatApiDate(runList.find((item) => item.id === run.id)!.created_at) : "当前项目"}</span><span>·</span><span>{pmStageLabel(run.current_stage)}</span></div>
                   <h1 className="text-xl font-semibold leading-8 tracking-tight">{run.status === "paused" ? "任务已暂停，可以从检查点继续" : run.current_stage === "awaiting_answers" ? "先把关键需求聊清楚" : run.current_stage === "awaiting_prd_confirm" ? "确认这一版要做什么" : run.current_stage === "awaiting_acceptance" ? "用真实任务，验证这一版" : run.current_stage === "delivered" ? "这一版已完成交付" : ["failed", "gate_failed", "cancelled"].includes(run.current_stage) ? "构建需要你的关注" : "正在把想法变成应用"}</h1>
                   <p className="mt-1 text-xs leading-6 text-muted">{run.current_stage === "awaiting_answers" ? "一次回答一个问题。选择方向，或直接写下你的想法。" : run.current_stage === "awaiting_prd_confirm" ? "在成果区核对需求，在这里补充修改并确认验收场景。" : run.current_stage === "awaiting_acceptance" ? "打开成品，逐项记录实际结果。发现问题后可以继续修改。" : run.current_stage === "delivered" ? "下载包含源码、需求文档和验证记录的交付包，或继续打磨下一版。" : "阶段进度会自动更新，生成的需求、代码和说明统一放在成果区。"}</p>
                 </div>

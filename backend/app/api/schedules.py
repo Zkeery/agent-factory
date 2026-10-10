@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user, require_api_key
 from app.core.errors import AppError
-from app.models import ProductProject, Schedule, SessionLocal, User
+from app.models import FactoryRun, ProductProject, Schedule, SessionLocal, User
 from app.schemas import CreateScheduleRequest, ScheduleOut, UpdateScheduleRequest
+from app.services.stages import TERMINAL_STAGES
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
 
@@ -29,7 +30,26 @@ def _schedule_or_404(session: Session, schedule_id: str, user: User) -> Schedule
     return s
 
 
-def _out(s: Schedule) -> ScheduleOut:
+def _pending_runs(session: Session, user_id: str) -> dict[str, FactoryRun]:
+    terminal = [stage.value for stage in TERMINAL_STAGES]
+    runs = (
+        session.query(FactoryRun)
+        .filter(
+            FactoryRun.user_id == user_id,
+            FactoryRun.auto_schedule_id.is_not(None),
+            FactoryRun.current_stage.not_in(terminal),
+        )
+        .order_by(FactoryRun.created_at.desc())
+        .all()
+    )
+    found: dict[str, FactoryRun] = {}
+    for run in runs:
+        if run.auto_schedule_id and run.auto_schedule_id not in found:
+            found[run.auto_schedule_id] = run
+    return found
+
+
+def _out(s: Schedule, pending: FactoryRun | None = None) -> ScheduleOut:
     return ScheduleOut(
         id=s.id,
         idea=s.idea,
@@ -37,6 +57,10 @@ def _out(s: Schedule) -> ScheduleOut:
         enabled=s.enabled,
         project_id=s.project_id,
         last_run_at=s.last_run_at,
+        last_skipped_at=s.last_skipped_at,
+        last_skip_reason=s.last_skip_reason or "",
+        pending_run_id=pending.id if pending else None,
+        pending_run_stage=pending.current_stage if pending else None,
         created_at=s.created_at,
     )
 
@@ -49,7 +73,8 @@ def list_schedules(session: Session = Depends(get_session), user: User = Depends
         .order_by(Schedule.created_at.desc())
         .all()
     )
-    return [_out(x) for x in items]
+    pending = _pending_runs(session, user.id)
+    return [_out(x, pending.get(x.id)) for x in items]
 
 
 @router.post("/schedules", response_model=ScheduleOut, status_code=201)

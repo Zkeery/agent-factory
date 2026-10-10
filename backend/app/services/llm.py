@@ -135,15 +135,38 @@ class RealLLM(LLMClient):
         usage = getattr(response, "usage", None)
         self.prompt_tokens += getattr(usage, "prompt_tokens", 0) or 0
         self.completion_tokens += getattr(usage, "completion_tokens", 0) or 0
-        message = response.choices[0].message
+        choice = response.choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        message = choice.message
+        max_tokens = 8000 if role == "builder" else 2500
         calls = []
+        json_invalid = False
         for call in message.tool_calls or []:
+            raw_arguments = call.function.arguments
             try:
-                arguments = json.loads(call.function.arguments)
+                arguments = json.loads(raw_arguments) if raw_arguments else None
             except (TypeError, ValueError):
                 arguments = None
+            if arguments is None:
+                json_invalid = True
             calls.append({"id": call.id, "name": call.function.name, "arguments": arguments})
-        return {"content": message.content or "", "tool_calls": calls}
+        truncated = finish_reason == "length" or json_invalid
+        if truncated:
+            logger.warning(
+                "模型输出被截断 role=%s finish_reason=%s completion_tokens=%s max_tokens=%s json_invalid=%s tool_count=%s",
+                role,
+                finish_reason,
+                getattr(usage, "completion_tokens", None),
+                max_tokens,
+                json_invalid,
+                len(calls),
+            )
+        return {
+            "content": message.content or "",
+            "tool_calls": calls,
+            "finish_reason": finish_reason,
+            "truncated": truncated,
+        }
 
     def generate_clarify(self, idea: str) -> list[dict]:
         prompt = _load_prompt("clarify.md").format(idea=idea)

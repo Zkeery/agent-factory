@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, TypeDecorator, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from app.core.config import settings
@@ -11,6 +11,27 @@ from app.core.config import settings
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UTCDateTime(TypeDecorator):
+    """数据库不保存时区。写入和读出都按 UTC，接口才能带上偏移。"""
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -27,9 +48,9 @@ class ProductProject(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     idea_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     workspace_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
 
 class FactoryRun(Base):
@@ -66,9 +87,9 @@ class FactoryRun(Base):
     acceptance_results: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     acceptance_checklist: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     acceptance_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    accepted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
 
 class StageEvent(Base):
@@ -79,7 +100,7 @@ class StageEvent(Base):
     stage: Mapped[str] = mapped_column(String(64), nullable=False)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False, default="stage")
     payload: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class Decision(Base):
@@ -104,7 +125,7 @@ class Confirmation(Base):
     run_id: Mapped[str] = mapped_column(String(36), ForeignKey("factory_runs.id"), index=True)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)  # prd
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")  # pending/confirmed
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class EvidenceItem(Base):
@@ -116,7 +137,7 @@ class EvidenceItem(Base):
     title: Mapped[str] = mapped_column(String(128), nullable=False)
     content_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
     kind: Mapped[str] = mapped_column(String(32), nullable=False, default="other")  # prd|code|deploy|readme|gate|other
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class RunMetric(Base):
@@ -135,7 +156,7 @@ class RunMetric(Base):
     score_decision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     score_prd: Mapped[int | None] = mapped_column(Integer, nullable=True)
     score_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class User(Base):
@@ -143,7 +164,7 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     phone: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class VerificationCode(Base):
@@ -152,9 +173,9 @@ class VerificationCode(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     phone: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     code: Mapped[str] = mapped_column(String(8), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class Session(Base):
@@ -162,7 +183,7 @@ class Session(Base):
 
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class Schedule(Base):
@@ -176,8 +197,10 @@ class Schedule(Base):
     idea: Mapped[str] = mapped_column(Text, nullable=False)
     trigger_time: Mapped[str] = mapped_column(String(5), nullable=False)  # "HH:MM"
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_skipped_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_skip_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 engine = create_engine(
@@ -270,3 +293,7 @@ def _migrate_schema(engine) -> None:
                 conn.execute(text("ALTER TABLE schedules ADD COLUMN last_run_at DATETIME"))
             if "created_at" not in sch_cols:
                 conn.execute(text("ALTER TABLE schedules ADD COLUMN created_at DATETIME"))
+            if "last_skipped_at" not in sch_cols:
+                conn.execute(text("ALTER TABLE schedules ADD COLUMN last_skipped_at DATETIME"))
+            if "last_skip_reason" not in sch_cols:
+                conn.execute(text("ALTER TABLE schedules ADD COLUMN last_skip_reason TEXT DEFAULT ''"))

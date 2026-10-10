@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AlertCircle, ArrowLeft, ArrowUpRight, BarChart3, CheckCircle2, Clock3, Coins, Download, Filter, FlaskConical, GitBranch, Loader2, PackageCheck, RefreshCw } from "lucide-react";
+import { formatApiDateTime } from "@/lib/dateTime";
 import type { Project } from "@/lib/factory";
 import {
   downloadProjectReview, executionModeLabel, formatInsightCost, formatInsightDuration,
@@ -24,9 +25,7 @@ const stageNames: Record<string, string> = {
 };
 
 function dateLabel(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return formatApiDateTime(value);
 }
 
 function SourceBadge({ source }: { source: string }) {

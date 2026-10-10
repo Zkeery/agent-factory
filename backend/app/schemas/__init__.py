@@ -90,6 +90,10 @@ class ScheduleOut(BaseModel):
     enabled: bool
     project_id: str | None = None
     last_run_at: datetime | None = None
+    last_skipped_at: datetime | None = None
+    last_skip_reason: str = ""
+    pending_run_id: str | None = None
+    pending_run_stage: str | None = None
     created_at: datetime
 
 

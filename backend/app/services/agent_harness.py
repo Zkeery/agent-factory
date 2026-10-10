@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import time
 import uuid
@@ -22,6 +23,15 @@ from app.services import iteration, testing
 
 MAX_TURNS = 6
 MAX_REPAIRS = 2
+MAX_TRUNCATION_RETRIES = 4
+TRUNCATION_REASON = "模型输出被截断，文件没有写完整。请缩小需求，或先完成能运行的主路径后再重试。"
+TRUNCATION_GUIDE = (
+    "上一次输出被截断，工具参数不完整，没有写入任何文件，这次不计入六次调用上限。"
+    "请一次只调用 write_files 写一个文件，内容必须完整且不能为空。"
+    "先写可运行的主路径：app.py 提供页面和 POST /generate 的核心结果；requirements.txt 与 README.md 可以随后再写。"
+    "增强功能等主路径检查通过后再加，并控制单次输出长度，不要用空字符串占位。"
+)
+logger = logging.getLogger("factory.agent")
 ALLOWED_FILES = {"app.py", "requirements.txt", "README.md"}
 MAX_FILE_BYTES = 300_000
 PROMPTS = Path(__file__).resolve().parent / "prompts"
@@ -263,7 +273,7 @@ def role_tools(role: str) -> list[dict]:
         _tool("handoff", "开发者交给验证者；验证者交回开发者修复（最多两轮）", {"reason": {"type": "string"}}, ["reason"]),
     ]
     if role == "builder":
-        tools.append(_tool("write_files", "提交完整文件内容，只允许三个指定文件；保留未要求修改的功能", {"files": {
+        tools.append(_tool("write_files", "一次提交一个白名单文件的完整非空内容。多个大文件请分开调用，避免输出被截断；禁止空字符串", {"files": {
             "type": "object", "properties": {name: {"type": "string"} for name in sorted(ALLOWED_FILES)},
             "additionalProperties": False,
         }}, ["files"]))
@@ -382,6 +392,9 @@ def _execute_tool(session: Session, run: FactoryRun, state: dict, task: dict, st
             raise ValueError("只能提交白名单中的源文件")
         if any(not isinstance(content, str) or len(content.encode("utf-8")) > MAX_FILE_BYTES for content in files.values()):
             raise ValueError("文件必须为文本且不超过 300KB")
+        blank = sorted(name for name, content in files.items() if not content.strip())
+        if blank:
+            raise ValueError("拒绝写入空文件：" + "、".join(blank) + "。请一次只写一个文件，并提交完整非空内容")
         # 先验证全部路径，再写入；每个文件以 replace 提交。中断时可幂等重放同一调用。
         paths = {name: _path(run.id, name) for name in files}
         for name, path in paths.items():
@@ -447,6 +460,35 @@ def _execute_tool(session: Session, run: FactoryRun, state: dict, task: dict, st
     return {"next_role": "builder", "repair_round": state["repair_rounds"]}
 
 
+def _blank_write(arguments: object) -> bool:
+    if not isinstance(arguments, dict):
+        return False
+    files = arguments.get("files")
+    if not isinstance(files, dict) or not files:
+        return False
+    return all(isinstance(content, str) and not content.strip() for content in files.values())
+
+
+def _response_truncated(response: object) -> bool:
+    """参数没解析出来，或输出到长度上限后只剩空文件，都视为截断。"""
+    if not isinstance(response, dict):
+        return False
+    calls = response.get("tool_calls")
+    if not isinstance(calls, list):
+        calls = []
+    if any(isinstance(call, dict) and "arguments" in call and call.get("arguments") is None for call in calls):
+        return True
+    marked = response.get("truncated") is True or response.get("finish_reason") == "length"
+    if not marked:
+        return False
+    if not calls:
+        return True
+    return all(
+        isinstance(call, dict) and call.get("name") == "write_files" and _blank_write(call.get("arguments"))
+        for call in calls
+    )
+
+
 def execute(session: Session, run: FactoryRun, client, prd: dict) -> bool:
     state = load_state(run)
     if state.get("status") == "completed":
@@ -496,6 +538,13 @@ def execute(session: Session, run: FactoryRun, client, prd: dict) -> bool:
                 if _handoff_checked_builder_budget(session, run, state, task):
                     continue
                 return _fail(session, run, state, f"{task['title']}已达到每轮六次模型调用上限")
+            prior_model_calls = sum(
+                1 for item in state["steps"]
+                if item.get("task_id") == task["id"] and item.get("tool") == "model_call"
+            )
+            if prior_model_calls >= MAX_TURNS + MAX_TRUNCATION_RETRIES:
+                capped = TRUNCATION_REASON if state.get("truncation_retries", {}).get(task["id"], 0) else f"{task['title']}已达到每轮六次模型调用上限"
+                return _fail(session, run, state, capped)
             state["turns"][task["id"]] = used + 1
             step = _step(state, task, "model_call")
             _persist(session, run, state)  # 在网络请求前消耗预算，进程中断也不会清零。
@@ -507,6 +556,24 @@ def execute(session: Session, run: FactoryRun, client, prd: dict) -> bool:
                 step["duration_ms"] = round((time.monotonic() - started) * 1000)
                 step["input_tokens"] = max(0, getattr(client, "prompt_tokens", 0) - before_input)
                 step["output_tokens"] = max(0, getattr(client, "completion_tokens", 0) - before_output)
+            if isinstance(response, dict) and _response_truncated(response):
+                retries = state.setdefault("truncation_retries", {}).get(task["id"], 0) + 1
+                state["truncation_retries"][task["id"]] = retries
+                state["turns"][task["id"]] = used
+                logger.warning(
+                    "模型输出被截断 role=%s finish_reason=%s output_tokens=%s truncation_retry=%s/%s",
+                    task["role"],
+                    response.get("finish_reason"),
+                    step.get("output_tokens"),
+                    retries,
+                    MAX_TRUNCATION_RETRIES,
+                )
+                step.update(status="failed", summary="模型输出被截断，未写入文件，本次不计入调用上限")
+                messages.append({"role": "user", "content": TRUNCATION_GUIDE})
+                if retries >= MAX_TRUNCATION_RETRIES:
+                    return _fail(session, run, state, TRUNCATION_REASON)
+                _persist(session, run, state, step["summary"])
+                continue
             calls = response.get("tool_calls") if isinstance(response, dict) else None
             valid = isinstance(calls, list) and 0 < len(calls) <= 3 and all(
                 isinstance(c, dict) and isinstance(c.get("id"), str) and isinstance(c.get("name"), str) for c in calls

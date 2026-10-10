@@ -497,6 +497,9 @@ const PM_FAILURE_TEXT: Record<string, { message: string; suggestion: string }> =
 
 /** PM 视角的失败人话；未知 code 或空走 internal_error 兜底。 */
 export function pmFailureText(code?: string | null, reason?: string | null): { message: string; suggestion: string } {
+  if (code === "agent_execution_failed" && reason?.includes("模型输出被截断")) {
+    return { message: "模型输出被截断", suggestion: "需求一次写得太大。缩小范围，或先做能跑起来的主路径后再重试" };
+  }
   if (code === "agent_execution_failed" && reason?.endsWith("已达到每轮六次模型调用上限")) {
     return { message: "本轮协作达到调用上限", suggestion: "执行记录和产物已经保存，可查看协作记录定位停止位置" };
   }
@@ -641,7 +644,17 @@ export interface Schedule {
   enabled: boolean;
   project_id?: string | null;
   last_run_at?: string | null;
+  last_skipped_at?: string | null;
+  last_skip_reason?: string;
+  pending_run_id?: string | null;
+  pending_run_stage?: string | null;
   created_at?: string;
+}
+
+export function scheduleBlockedHint(stage: string | null | undefined): string | null {
+  if (!stage) return null;
+  const label = STAGE_CN[stage as Stage] || "未完成";
+  return `已有未完成的运行（${label}），到点不会再新建`;
 }
 
 export const listSchedules = (signal?: AbortSignal) => api<Schedule[]>("/api/v1/schedules", { signal, cache: "no-store" });
