@@ -80,7 +80,7 @@ export function ProjectVersionPicker({ run, runs, busy, role, onSelect }: {
       {!currentListed && <option value={run.id}>当前版本</option>}
       {[...versions].reverse().map((version, index) => {
         const stage = version.id === run.id ? run.current_stage : version.current_stage;
-        return <option key={version.id} value={version.id}>V{projectVersionNumber(version)} · {version.parent_run_id ? "修改版" : "初版"}{index === 0 ? " · 最新" : ""}{version.auto_schedule_id ? " · 自动" : ""} · {formatApiDateTime(version.created_at)} · {role === "pm" ? pmStageLabel(stage) : STAGE_CN[stage]}</option>;
+        return <option key={version.id} value={version.id}>V{projectVersionNumber(version, versions)} · {version.parent_run_id ? "修改版" : "初版"}{index === 0 ? " · 最新" : ""}{version.auto_schedule_id ? " · 自动" : ""} · {formatApiDateTime(version.created_at)} · {role === "pm" ? pmStageLabel(stage) : STAGE_CN[stage]}</option>;
       })}
     </select>
   </div>;

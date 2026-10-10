@@ -34,10 +34,16 @@ describe("项目导航与版本归属", () => {
     expect(sortProjectVersions(versions).map((item) => item.id)).toEqual(["v1", "v2", "v3"]);
     expect(versions.map((item) => item.id)).toEqual(["v3", "v1", "v2"]);
   });
-  it("隐藏失败版本后沿用已保存序号，不把 V2、V4 改成连续号", () => {
-    expect(projectVersionNumber({ version_no: 2 })).toBe(2);
-    expect(projectVersionNumber({ version_no: 4 })).toBe(4);
-    expect(projectVersionNumber({ version_no: 0 })).toBe(1);
-    expect(projectVersionNumber({})).toBe(1);
+  it("可见版本按创建顺序连号，已保存的间隔号不再展示", () => {
+    const versions = [
+      { ...run("v2", "one", 2), version_no: 2 },
+      { ...run("v4", "one", 4), version_no: 4 },
+      { ...run("v6", "one", 6), version_no: 6 },
+      { ...run("v7", "one", 7), version_no: 7 },
+    ];
+    expect(versions.map((item) => projectVersionNumber(item, versions))).toEqual([1, 2, 3, 4]);
+    const alone = run("legacy", null, 1);
+    expect(projectVersionNumber(alone, [alone])).toBe(1);
+    expect(projectVersionNumber({ id: "missing", created_at: "2026-10-01T10:00:00" }, versions)).toBe(1);
   });
 });

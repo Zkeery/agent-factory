@@ -88,9 +88,9 @@ class FactoryRun(Base):
     acceptance_checklist: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     acceptance_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
     accepted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    # 项目内展示序号。隐藏失败版本后不回收、不改已展示版本的号。
+    # 内部创建计数。用户看到的序号按可见版本的创建顺序连号计算，不直接使用本列。
     version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # 用户整段重跑失败版本并创建新版本后写入。列表不展示，统计仍计入。
+    # 用户整段重跑失败版本并创建新版本后写入。用户界面不展示，统计仍计入，不进回收站。
     superseded_by_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     superseded_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

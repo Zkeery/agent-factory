@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.core.errors import AppError
 from app.services.decision_context import normalize_decision_answer
 from app.services.project_lifecycle import active_run_filter
-from app.services.version_visibility import mark_replaced_failure, next_version_no, visible_version_filter
+from app.services.version_visibility import mark_replaced_failure, next_version_no, presentation, visible_version_filter
 from app.models import Confirmation, Decision, EvidenceItem, FactoryRun, ProductProject, RunMetric, SessionLocal, StageEvent, User
 from app.schemas import (
     AcceptRunRequest,
@@ -88,6 +88,7 @@ def _run_out(session: Session, run: FactoryRun) -> RunOut:
     decisions = session.query(Decision).filter(Decision.run_id == run.id).all()
     evidence = session.query(EvidenceItem).filter(EvidenceItem.run_id == run.id).order_by(EvidenceItem.id.desc()).all()
     metric = session.query(RunMetric).filter(RunMetric.run_id == run.id).first()
+    shown_number, shown_parent = presentation(session, [run])[run.id]
     return RunOut(
         id=run.id,
         idea=run.idea,
@@ -103,8 +104,8 @@ def _run_out(session: Session, run: FactoryRun) -> RunOut:
         llm_provider=(getattr(run, 'llm_provider', None) or '') or '',
         llm_model=(getattr(run, 'llm_model_snapshot', None) or '') or '',
         execution_mode=run.execution_mode or "workflow",
-        parent_run_id=run.parent_run_id,
-        version_no=run.version_no or 0,
+        parent_run_id=shown_parent,
+        version_no=shown_number,
         superseded_by_run_id=run.superseded_by_run_id,
         change_request=run.change_request or "",
         requirement_feedback=iteration.json_list(run.requirement_feedback),
@@ -186,11 +187,11 @@ def create_run(body: CreateRunRequest, session: Session = Depends(get_session), 
     return _run_out(session, run)
 
 
-def _run_summary(run: FactoryRun) -> RunSummary:
+def _run_summary(run: FactoryRun, version_no: int, parent_run_id: str | None) -> RunSummary:
     return RunSummary(
         id=run.id, idea=run.idea, current_stage=run.current_stage, status=run.status, created_at=run.created_at,
-        project_id=run.project_id, auto_schedule_id=getattr(run, "auto_schedule_id", None), parent_run_id=run.parent_run_id,
-        execution_mode=run.execution_mode or "workflow", version_no=run.version_no or 0,
+        project_id=run.project_id, auto_schedule_id=getattr(run, "auto_schedule_id", None), parent_run_id=parent_run_id,
+        execution_mode=run.execution_mode or "workflow", version_no=version_no,
     )
 
 
@@ -199,7 +200,8 @@ def list_runs(session: Session = Depends(get_session), user: User = Depends(get_
     runs = session.query(FactoryRun).filter(
         FactoryRun.user_id == user.id, active_run_filter(), visible_version_filter(),
     ).order_by(FactoryRun.created_at.desc()).all()
-    return RunListOut(runs=[_run_summary(r) for r in runs])
+    shown = presentation(session, runs)
+    return RunListOut(runs=[_run_summary(r, *shown[r.id]) for r in runs])
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)

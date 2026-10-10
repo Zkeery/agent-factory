@@ -12,7 +12,7 @@ from app.core.auth import get_current_user, require_api_key
 from app.core.errors import AppError
 from app.models import FactoryRun, ProductProject, Schedule, User
 from app.services.stages import Stage
-from app.services.version_visibility import visible_version_filter
+from app.services.version_visibility import presentation, visible_version_filter
 from app.schemas import (
     CreateProjectRequest,
     ProjectListOut,
@@ -141,6 +141,7 @@ def list_project_runs(project_id: str, session: Session = Depends(get_session), 
         .order_by(FactoryRun.created_at.desc())
         .all()
     )
+    shown = presentation(session, runs)
     return RunListOut(
         runs=[
             RunSummary(
@@ -150,7 +151,8 @@ def list_project_runs(project_id: str, session: Session = Depends(get_session), 
                 status=r.status,
                 created_at=r.created_at,
                 project_id=r.project_id,
-                version_no=r.version_no or 0,
+                parent_run_id=shown[r.id][1],
+                version_no=shown[r.id][0],
             )
             for r in runs
         ]

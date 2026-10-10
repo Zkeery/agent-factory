@@ -1,8 +1,12 @@
 """项目版本列表的可见性。
 
-用户对失败或闸门失败的版本做整段重跑并成功创建新版本后，旧版本从列表、
-版本数中隐藏。记录、父子关联和复盘统计仍保留。已取消、修改版、定时创建
-和就地重测都不走这条隐藏。
+用户对失败或闸门失败的版本做整段重跑并成功创建新版本后，旧版本从用户可见的
+版本选择器、版本数、侧栏和修改版父版本引用中消失。数据库仍保留该行、真实
+父子关联和产物文件，复盘统计继续计入；不写入项目回收站。已取消、修改版、
+定时创建和就地重测都不走这条隐藏。
+
+用户看到的版本号是同一项目内可见版本按创建时间、再按标识排出的连续序号。
+库里的 version_no 只作内部创建计数，可以有间隔，不直接展示。
 """
 from __future__ import annotations
 
@@ -23,11 +27,84 @@ def visible_version_filter():
 
 
 def next_version_no(session: Session, project_id: str | None) -> int:
-    """项目内序号只增不减。没有项目归属的历史运行各自显示为 V1。"""
+    """内部创建计数，只增不减。展示序号另按可见版本计算。"""
     if not project_id:
         return 1
     current = session.query(func.max(FactoryRun.version_no)).filter(FactoryRun.project_id == project_id).scalar()
     return int(current or 0) + 1
+
+
+def _load_successor_index(session: Session, seeds: set[str]) -> dict[str, FactoryRun]:
+    pending = set(seeds)
+    found: dict[str, FactoryRun] = {}
+    while pending:
+        rows = session.query(FactoryRun).filter(FactoryRun.id.in_(pending)).all()
+        pending = set()
+        for row in rows:
+            found[row.id] = row
+            nxt = row.superseded_by_run_id
+            if nxt and nxt not in found:
+                pending.add(nxt)
+    return found
+
+
+def _walk_visible_parent(parent_id: str, index: dict[str, FactoryRun]) -> str:
+    seen: set[str] = set()
+    current = parent_id
+    while current and current not in seen:
+        seen.add(current)
+        run = index.get(current)
+        if run is None:
+            return parent_id
+        if not run.superseded_by_run_id:
+            return run.id
+        current = run.superseded_by_run_id
+    return parent_id
+
+
+def visible_parent_ids(session: Session, parent_ids: list[str | None]) -> dict[str, str]:
+    """把指向已被替代失败版本的父引用，改到替代链末端仍可见的版本。
+
+    库里没有这条运行时保留原标识，避免把未知引用清空。
+    """
+    seeds = {item for item in parent_ids if item}
+    index = _load_successor_index(session, seeds)
+    return {item: _walk_visible_parent(item, index) for item in seeds}
+
+
+def presentation(session: Session, runs: list[FactoryRun]) -> dict[str, tuple[int, str | None]]:
+    """每个运行的展示序号，以及用户可见的父版本标识。
+
+    同一项目里没有替代关系的版本，按创建时间、再按标识从 1 连续编号。
+    已被替代的版本不占号。没有项目归属的单条运行显示为 1。
+    """
+    project_ids = {run.project_id for run in runs if run.project_id}
+    ranks: dict[str, int] = {}
+    if project_ids:
+        siblings = (
+            session.query(FactoryRun)
+            .filter(FactoryRun.project_id.in_(project_ids), visible_version_filter())
+            .order_by(FactoryRun.created_at.asc(), FactoryRun.id.asc())
+            .all()
+        )
+        grouped: dict[str, list[FactoryRun]] = defaultdict(list)
+        for sibling in siblings:
+            grouped[sibling.project_id].append(sibling)
+        for items in grouped.values():
+            for index, item in enumerate(items, start=1):
+                ranks[item.id] = index
+    parents = visible_parent_ids(session, [run.parent_run_id for run in runs])
+    result: dict[str, tuple[int, str | None]] = {}
+    for run in runs:
+        if run.superseded_by_run_id:
+            number = 0
+        elif not run.project_id:
+            number = 1
+        else:
+            number = ranks.get(run.id, 0)
+        parent = parents.get(run.parent_run_id) if run.parent_run_id else None
+        result[run.id] = (number, parent)
+    return result
 
 
 def mark_replaced_failure(old: FactoryRun, new: FactoryRun, when: datetime | None = None) -> bool:

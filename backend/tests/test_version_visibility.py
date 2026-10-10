@@ -1,4 +1,4 @@
-"""整段重跑后隐藏被替代的失败版本，序号继续递增，复盘仍计入。"""
+"""整段重跑后隐藏被替代的失败版本，可见版本连号，复盘仍计入。"""
 from __future__ import annotations
 
 import time
@@ -11,7 +11,7 @@ import pytest
 from app.models import FactoryRun, Schedule, SessionLocal
 from app.services import insights, metrics
 from app.services.stages import Stage
-from app.services.version_visibility import assign_missing_version_numbers, backfill_replaced_failures
+from app.services.version_visibility import assign_missing_version_numbers, backfill_replaced_failures, presentation
 
 DATA_ROOT = Path(__file__).resolve().parents[1] / "data"
 APP_SOURCE = (
@@ -91,6 +91,45 @@ def test_backfill_hides_only_retried_failures_and_keeps_numbers(session):
     assert session.get(FactoryRun, "successor").version_no == 2
 
 
+def test_historical_gaps_display_as_consecutive_visible_numbers(session):
+    """附图一类历史数据：V1/V3/V5 已被重跑替代后，剩下四条显示为 V1–V4。"""
+    start = datetime(2026, 10, 2, tzinfo=timezone.utc)
+    for index in range(1, 8):
+        session.add(FactoryRun(
+            id=f"hist-{index}",
+            idea="历史项目",
+            user_id="owner",
+            project_id="history",
+            current_stage="gate_failed" if index in {1, 3, 5} else "delivered",
+            status="done",
+            created_at=start + timedelta(minutes=index),
+            version_no=index,
+            superseded_by_run_id=f"hist-{index + 1}" if index in {1, 3, 5} else None,
+        ))
+    child = FactoryRun(
+        id="hist-child",
+        idea="历史项目",
+        user_id="owner",
+        project_id="history",
+        current_stage="delivered",
+        status="done",
+        created_at=start + timedelta(minutes=8),
+        version_no=8,
+        parent_run_id="hist-1",
+    )
+    session.add(child)
+    session.commit()
+    runs = session.query(FactoryRun).filter(FactoryRun.project_id == "history").all()
+    shown = presentation(session, runs)
+    visible = [run for run in runs if run.superseded_by_run_id is None]
+    visible.sort(key=lambda run: (run.created_at, run.id))
+    assert [shown[run.id][0] for run in visible] == [1, 2, 3, 4, 5]
+    assert shown["hist-1"][0] == 0
+    assert shown["hist-child"][1] == "hist-2"
+    stored_parent = session.get(FactoryRun, "hist-child").parent_run_id
+    assert stored_parent == "hist-1"
+
+
 @pytest.mark.parametrize("stage", ["failed", "gate_failed"])
 def test_retry_hides_replaced_failure_and_keeps_lineage(client, stage):
     kept = client.post("/api/v1/runs", json={"idea": "仍要留在列表里的版本"}).json()
@@ -104,7 +143,6 @@ def test_retry_hides_replaced_failure_and_keeps_lineage(client, stage):
         failed.parent_run_id = kept["id"]
         failed.change_request = "保留现有记账，修正余额"
         session.commit()
-        failed_version = failed.version_no
     finally:
         session.close()
     mark_stage(created["id"], stage)
@@ -115,20 +153,23 @@ def test_retry_hides_replaced_failure_and_keeps_lineage(client, stage):
     hidden = client.get(f"/api/v1/runs/{created['id']}")
     assert hidden.status_code == 200
     body = hidden.json()
+    kept_body = client.get(f"/api/v1/runs/{kept['id']}").json()
     assert body["superseded_by_run_id"] == new["id"]
     assert body["parent_run_id"] == kept["id"]
     assert body["change_request"] == "保留现有记账，修正余额"
     assert new["parent_run_id"] == kept["id"]
     assert new["change_request"] == "保留现有记账，修正余额"
-    assert new["version_no"] == failed_version + 1
-    assert new["version_no"] != failed_version
+    assert body["version_no"] == 0
+    assert kept_body["version_no"] == 1
+    assert new["version_no"] == 2
 
     visible = listed_ids(client)
     assert kept["id"] in visible
     assert new["id"] in visible
     assert created["id"] not in visible
-    project_runs = [item["id"] for item in client.get(f"/api/v1/projects/{project_id}/runs").json()["runs"]]
-    assert created["id"] not in project_runs
+    project_runs = client.get(f"/api/v1/projects/{project_id}/runs").json()["runs"]
+    assert created["id"] not in [item["id"] for item in project_runs]
+    assert sorted(item["version_no"] for item in project_runs) == [1, 2]
     projects = client.get("/api/v1/projects").json()["projects"]
     assert next(item for item in projects if item["id"] == project_id)["run_count"] == 2
 
@@ -139,6 +180,8 @@ def test_retry_hides_replaced_failure_and_keeps_lineage(client, stage):
         review = insights.build_review(session, user_id, source="all")
         assert review["counts"]["total"] == 3
         assert review["counts"]["failed"] >= 1
+        assert created["id"] not in {row["run_id"] for row in review["rows"]}
+        assert any("不再列入版本记录" in note for note in review["notes"])
     finally:
         session.close()
 
@@ -158,7 +201,6 @@ def test_revise_does_not_hide_parent(client):
         run.current_stage = "awaiting_acceptance"
         run.status = "waiting"
         run.prd_snapshot = '{"goal":"记账"}'
-        parent_version = run.version_no
         session.commit()
     finally:
         session.close()
@@ -171,9 +213,50 @@ def test_revise_does_not_hide_parent(client):
     parent = client.get(f"/api/v1/runs/{run_id}").json()
     assert parent["superseded_by_run_id"] is None
     assert child["parent_run_id"] == run_id
-    assert child["version_no"] == parent_version + 1
+    assert parent["version_no"] == 1
+    assert child["version_no"] == 2
     assert run_id in listed_ids(client)
     assert child["id"] in listed_ids(client)
+
+
+def test_revision_cites_visible_replacement_after_parent_retry(client):
+    created = client.post("/api/v1/runs", json={"idea": "失败后再修改，随后整段重跑"}).json()
+    run_id = created["id"]
+    wait_stage(client, run_id, "awaiting_answers")
+    code_dir = DATA_ROOT / "code" / run_id
+    code_dir.mkdir(parents=True, exist_ok=True)
+    (code_dir / "app.py").write_text(APP_SOURCE, encoding="utf-8")
+    (code_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (code_dir / "README.md").write_text("本地运行说明\n", encoding="utf-8")
+    session = SessionLocal()
+    try:
+        run = session.get(FactoryRun, run_id)
+        run.current_stage = "awaiting_acceptance"
+        run.status = "waiting"
+        run.prd_snapshot = '{"goal":"记账"}'
+        session.commit()
+    finally:
+        session.close()
+    revised = client.post(
+        f"/api/v1/runs/{run_id}/revise",
+        json={"change_request": "保留现有记账，修正余额", "request_id": "parent-later-retried"},
+    )
+    assert revised.status_code == 201, revised.text
+    child_id = revised.json()["id"]
+    mark_stage(run_id, "failed")
+    retried = client.post(f"/api/v1/runs/{run_id}/retry")
+    assert retried.status_code == 201, retried.text
+    replacement_id = retried.json()["id"]
+    child = client.get(f"/api/v1/runs/{child_id}").json()
+    assert child["parent_run_id"] == replacement_id
+    listed = client.get("/api/v1/runs").json()["runs"]
+    assert run_id not in [item["id"] for item in listed]
+    assert sorted(item["version_no"] for item in listed) == [1, 2]
+    session = SessionLocal()
+    try:
+        assert session.get(FactoryRun, child_id).parent_run_id == run_id
+    finally:
+        session.close()
 
 
 def test_cancelled_retry_retest_and_schedule_stay_visible(client):
