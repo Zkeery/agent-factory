@@ -12,7 +12,8 @@ import {
   summarizeAppStatus,
   summarizeDecisionLedger,
   pmFailureText,
-  scheduleBlockedHint,
+  scheduleInternalIntro,
+  scheduleSkipLine,
   Artifact,
   Decision,
   Run,
@@ -38,10 +39,24 @@ describe("失败人话 pmFailureText", () => {
   });
 });
 
-describe("定时任务未完成提示", () => {
-  it("等待回答时说明到点不会再新建", () => {
-    expect(scheduleBlockedHint("awaiting_answers")).toBe("已有未完成的运行（等待回答），到点不会再新建");
-    expect(scheduleBlockedHint(null)).toBeNull();
+describe("定时任务内部机制文案", () => {
+  it("产品视角和默认不展示跳过原因、重复新建和服务器时钟", () => {
+    expect(scheduleInternalIntro("pm")).toEqual({ intro: null, clockTitle: undefined });
+    expect(scheduleInternalIntro()).toEqual({ intro: null, clockTitle: undefined });
+    expect(scheduleSkipLine("pm", "awaiting_answers", "10/10 21:35")).toBeNull();
+    expect(scheduleSkipLine()).toBeNull();
+  });
+
+  it("开发视角保留未完成时的跳过说明", () => {
+    const notes = scheduleInternalIntro("dev");
+    expect(notes.intro).toContain("服务器当地时间");
+    expect(notes.intro).toContain("不会重复新建");
+    expect(notes.clockTitle).toBe("服务器当地时间");
+    expect(scheduleSkipLine("dev", "awaiting_answers")).toBe("已有未完成的运行（等待回答），到点不会再新建");
+    expect(scheduleSkipLine("dev", "awaiting_answers", "10/10 21:35")).toBe(
+      "已有未完成的运行（等待回答），到点不会再新建 · 上次跳过 10/10 21:35",
+    );
+    expect(scheduleSkipLine("dev", null)).toBeNull();
   });
 });
 

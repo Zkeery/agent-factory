@@ -651,10 +651,25 @@ export interface Schedule {
   created_at?: string;
 }
 
-export function scheduleBlockedHint(stage: string | null | undefined): string | null {
-  if (!stage) return null;
+/** 跳过原因、重复新建和服务器时钟只在开发视角展示，产品视角与默认不展示。 */
+export function scheduleInternalIntro(role: ViewRole = "pm"): { intro: string | null; clockTitle: string | undefined } {
+  if (role !== "dev") return { intro: null, clockTitle: undefined };
+  return {
+    intro: "到点后按服务器当地时间自动运行。上一次还在等待回答或尚未完成时，不会重复新建。",
+    clockTitle: "服务器当地时间",
+  };
+}
+
+/** 未完成运行的跳过说明。非开发视角不返回文案。 */
+export function scheduleSkipLine(
+  role: ViewRole = "pm",
+  stage: string | null | undefined = null,
+  skippedAtLabel: string | null = null,
+): string | null {
+  if (role !== "dev" || !stage) return null;
   const label = STAGE_CN[stage as Stage] || "未完成";
-  return `已有未完成的运行（${label}），到点不会再新建`;
+  const base = `已有未完成的运行（${label}），到点不会再新建`;
+  return skippedAtLabel ? `${base} · 上次跳过 ${skippedAtLabel}` : base;
 }
 
 export const listSchedules = (signal?: AbortSignal) => api<Schedule[]>("/api/v1/schedules", { signal, cache: "no-store" });

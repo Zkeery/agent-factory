@@ -33,7 +33,8 @@ import {
   PM_STAGE_ORDER,
   pmStageLabel,
   pmFailureText,
-  scheduleBlockedHint,
+  scheduleInternalIntro,
+  scheduleSkipLine,
   Project,
   RunSummary,
   Schedule,
@@ -146,6 +147,7 @@ function TaskList({
   const [newTime, setNewTime] = useState("09:00");
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const scheduleNotes = scheduleInternalIntro(role);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <button disabled={busy} onClick={onNew} className="flex h-[76px] shrink-0 items-center gap-2.5 px-5 text-left" aria-label="返回工作台">
@@ -219,16 +221,16 @@ function TaskList({
             {scheduleError && <p role="alert" className="text-[11px] text-red-600">{scheduleError}</p>}
           </div>
         )}
-        <p className="mt-2 text-[10px] leading-relaxed text-muted">到点后按服务器当地时间自动运行。上一次还在等待回答或尚未完成时，不会重复新建。</p>
+        {scheduleNotes.intro && <p className="mt-2 text-[10px] leading-relaxed text-muted">{scheduleNotes.intro}</p>}
         {schedules.length > 0 && (
           <div className="mt-2 space-y-2">
             {schedules.map((s) => {
-              const blocked = scheduleBlockedHint(s.pending_run_stage);
+              const skipLine = scheduleSkipLine(role, s.pending_run_stage, s.last_skipped_at ? formatApiDateTime(s.last_skipped_at) : null);
               return (
               <div key={s.id} className="text-xs">
                 <div className="flex items-center gap-1.5">
                   <span className="min-w-0 flex-1 truncate" style={{ color: s.enabled ? "var(--ink)" : "var(--color-muted)" }}>{s.idea}</span>
-                  <span title="服务器当地时间" style={{ color: "var(--color-muted)" }}>{s.trigger_time}</span>
+                  <span title={scheduleNotes.clockTitle} style={{ color: "var(--color-muted)" }}>{s.trigger_time}</span>
                   <label className="flex items-center gap-1" style={{ color: s.enabled ? "var(--ok)" : "var(--color-muted)" }}>
                     <input
                       type="checkbox"
@@ -240,7 +242,7 @@ function TaskList({
                   </label>
                   <button className="rounded-full border px-2 py-0.5" style={{ borderColor: "var(--color-line)", color: "var(--color-muted)" }} onClick={() => onDeleteSchedule(s.id)}>删</button>
                 </div>
-                {blocked && <div className="mt-1 text-[10px] leading-relaxed text-muted">{blocked}{s.last_skipped_at ? ` · 上次跳过 ${formatApiDateTime(s.last_skipped_at)}` : ""}{s.pending_run_id ? <button type="button" className="ml-1 text-brand" onClick={() => onSelect(s.pending_run_id!)}>查看</button> : null}</div>}
+                {skipLine && <div className="mt-1 text-[10px] leading-relaxed text-muted">{skipLine}{s.pending_run_id ? <button type="button" className="ml-1 text-brand" onClick={() => onSelect(s.pending_run_id!)}>查看</button> : null}</div>}
               </div>
               );
             })}
