@@ -114,7 +114,8 @@ def test_requirements_while_answering_do_not_skip_human_gate(local_pipeline, cli
     data = response.json()
     assert data["current_stage"] == "awaiting_answers"
     assert any(item["status"] == "open" for item in data["decisions"])
-    assert len(data["acceptance_scenarios"]) >= 3
+    assert len(data["acceptance_scenarios"]) == 1
+    assert data["acceptance_scenarios"][0]["id"] == "main-flow"
     assert client.post(f"/api/v1/runs/{run['id']}/requirements", json={"feedback": "  "}).status_code == 422
     early_revision = data["prd_revision"]
     early_prd = next(item["content"] for item in data["evidence"] if item["stage"] == "prd")
@@ -155,9 +156,9 @@ def test_scenarios_validate_content_and_freeze_after_confirmation(local_pipeline
     run = reach_prd(client, create_run(client))
     url = f"/api/v1/runs/{run['id']}/acceptance-scenarios"
     cases = run["acceptance_scenarios"]
-    assert client.put(url, json={"scenarios": cases[:2]}).status_code == 422
+    assert client.put(url, json={"scenarios": []}).status_code == 422
     duplicate = copy.deepcopy(cases)
-    duplicate[1]["id"] = duplicate[0]["id"]
+    duplicate.append(copy.deepcopy(duplicate[0]))
     assert client.put(url, json={"scenarios": duplicate}).status_code == 422
     blank = copy.deepcopy(cases)
     blank[0]["expected_output"] = "  "
@@ -178,9 +179,9 @@ def test_scenario_acceptance_rejects_incomplete_results(local_pipeline, client, 
     run = reach_acceptance(client, create_run(client))
     results = scenario_results(run)
     if invalid == "missing":
-        results.pop()
+        results.clear()
     elif invalid == "duplicate":
-        results[1]["scenario_id"] = results[0]["scenario_id"]
+        results.append(dict(results[0]))
     elif invalid == "unknown":
         results[0]["scenario_id"] = "previous-version-scenario"
     elif invalid == "failed":
@@ -191,6 +192,41 @@ def test_scenario_acceptance_rejects_incomplete_results(local_pipeline, client, 
     assert response.status_code == 400, response.text
     assert response.json()["error"]["code"] == "acceptance_incomplete"
     assert get_run(client, run["id"])["accepted_at"] is None
+
+
+def test_historical_extra_scenarios_stay_stored_and_do_not_block_main_flow(local_pipeline, client):
+    run = reach_prd(client, create_run(client))
+    cases = copy.deepcopy(run["acceptance_scenarios"])
+    cases.append({"id": "side", "title": "空输入", "input": "留空后提交", "expected_output": "提示补充内容"})
+    saved = client.put(f"/api/v1/runs/{run['id']}/acceptance-scenarios", json={"scenarios": cases})
+    assert saved.status_code == 200, saved.text
+    ready = reach_acceptance(client, saved.json())
+    assert [item["id"] for item in ready["acceptance_scenarios"]] == ["main-flow", "side"]
+    only_main = [{"scenario_id": "main-flow", "passed": True, "observation": "主流程走通"}]
+    accepted = client.post(
+        f"/api/v1/runs/{ready['id']}/accept",
+        json={"checklist": checklist(), "scenario_results": only_main, "note": "主流程通过"},
+    )
+    assert accepted.status_code == 200, accepted.text
+    restored = get_run(client, ready["id"])
+    assert restored["current_stage"] == "delivered"
+    assert [item["id"] for item in restored["acceptance_scenarios"]] == ["main-flow", "side"]
+    assert restored["acceptance_results"] == only_main
+    side_failed = [
+        {"scenario_id": "main-flow", "passed": True, "observation": "主流程走通"},
+        {"scenario_id": "side", "passed": False, "observation": "空输入仍生成了内容"},
+    ]
+    # 已交付后再提交不会改写记录；下面用另一条运行确认附带的历史失败观察不阻断主流程。
+    other = reach_prd(client, create_run(client, idea="另一条需要保留历史场景的运行"))
+    other_cases = copy.deepcopy(other["acceptance_scenarios"]) + cases[1:]
+    other_saved = client.put(f"/api/v1/runs/{other['id']}/acceptance-scenarios", json={"scenarios": other_cases})
+    other_ready = reach_acceptance(client, other_saved.json())
+    kept = client.post(
+        f"/api/v1/runs/{other_ready['id']}/accept",
+        json={"checklist": checklist(), "scenario_results": side_failed, "note": "主流程通过，附带旧观察"},
+    )
+    assert kept.status_code == 200, kept.text
+    assert get_run(client, other_ready["id"])["acceptance_results"] == side_failed
 
 
 def test_successful_acceptance_persists_observations_and_timestamp(local_pipeline, client):

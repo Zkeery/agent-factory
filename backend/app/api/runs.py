@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.errors import AppError
 from app.services.decision_context import normalize_decision_answer
 from app.services.project_lifecycle import active_run_filter
+from app.services.version_visibility import mark_replaced_failure, next_version_no, visible_version_filter
 from app.models import Confirmation, Decision, EvidenceItem, FactoryRun, ProductProject, RunMetric, SessionLocal, StageEvent, User
 from app.schemas import (
     AcceptRunRequest,
@@ -103,6 +104,8 @@ def _run_out(session: Session, run: FactoryRun) -> RunOut:
         llm_model=(getattr(run, 'llm_model_snapshot', None) or '') or '',
         execution_mode=run.execution_mode or "workflow",
         parent_run_id=run.parent_run_id,
+        version_no=run.version_no or 0,
+        superseded_by_run_id=run.superseded_by_run_id,
         change_request=run.change_request or "",
         requirement_feedback=iteration.json_list(run.requirement_feedback),
         prd_revision=run.prd_revision or 0,
@@ -175,6 +178,7 @@ def create_run(body: CreateRunRequest, session: Session = Depends(get_session), 
         llm_model_snapshot=model_snap,
         acceptance_mode=body.acceptance_mode,
         execution_mode=body.execution_mode,
+        version_no=next_version_no(session, project_id),
     )
     session.add(run)
     session.commit()
@@ -183,9 +187,19 @@ def create_run(body: CreateRunRequest, session: Session = Depends(get_session), 
 
 
 @router.get("/runs", response_model=RunListOut)
+def _run_summary(run: FactoryRun) -> RunSummary:
+    return RunSummary(
+        id=run.id, idea=run.idea, current_stage=run.current_stage, status=run.status, created_at=run.created_at,
+        project_id=run.project_id, auto_schedule_id=getattr(run, "auto_schedule_id", None), parent_run_id=run.parent_run_id,
+        execution_mode=run.execution_mode or "workflow", version_no=run.version_no or 0,
+    )
+
+
 def list_runs(session: Session = Depends(get_session), user: User = Depends(get_current_user)):
-    runs = session.query(FactoryRun).filter(FactoryRun.user_id == user.id, active_run_filter()).order_by(FactoryRun.created_at.desc()).all()
-    return RunListOut(runs=[RunSummary(id=r.id, idea=r.idea, current_stage=r.current_stage, status=r.status, created_at=r.created_at, project_id=r.project_id, auto_schedule_id=getattr(r, 'auto_schedule_id', None), parent_run_id=r.parent_run_id, execution_mode=r.execution_mode or "workflow") for r in runs])
+    runs = session.query(FactoryRun).filter(
+        FactoryRun.user_id == user.id, active_run_filter(), visible_version_filter(),
+    ).order_by(FactoryRun.created_at.desc()).all()
+    return RunListOut(runs=[_run_summary(r) for r in runs])
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)
@@ -279,6 +293,7 @@ def revise_run(run_id: str, body: ReviseRunRequest, session: Session = Depends(g
             llm_provider=parent.llm_provider, llm_model_snapshot=parent.llm_model_snapshot,
             acceptance_mode=body.acceptance_mode,
             execution_mode=execution_mode,
+            version_no=next_version_no(session, parent.project_id),
         )
         session.add(child)
         try:
@@ -342,7 +357,7 @@ def _confirm_prd(run_id: str, body: ConfirmPrdRequest, session: Session, user: U
         try:
             iteration.validate_scenarios(iteration.json_list(run.acceptance_scenarios))
         except ValueError:
-            raise AppError("acceptance_scenarios_incomplete", "请先准备至少三条完整业务验收场景", 400)
+            raise AppError("acceptance_scenarios_incomplete", "请先写清主流程怎么操作、怎样算走通", 400)
     confirmation = (
         session.query(Confirmation)
         .filter(Confirmation.run_id == run_id, Confirmation.kind == "prd")
@@ -399,8 +414,10 @@ def retry_run(run_id: str, session: Session = Depends(get_session), user: User =
         parent_context=old.parent_context or "{}",
         requirement_feedback=old.requirement_feedback or "[]",
         acceptance_mode=old.acceptance_mode or "basic",
+        version_no=next_version_no(session, old.project_id),
     )
     session.add(new)
+    mark_replaced_failure(old, new)
     session.commit()
     engine.start_run_async(new.id)
     return _run_out(session, new)

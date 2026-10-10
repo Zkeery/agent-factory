@@ -66,6 +66,12 @@ describe("人工验收的三态草稿", () => {
     drafts[0].status = "failed";
     expect(acceptanceDraftSaveError(drafts)).toBeNull();
     expect(acceptanceResultError(scenarios, toAcceptanceResults(drafts))).toContain("未通过");
+    const sideIssue = drafts.map((draft, index) => index === 0
+      ? { ...draft, status: "passed" as const, observation: "主流程走通" }
+      : index === 1
+        ? { ...draft, status: "failed" as const, observation: "重复点击仍新增了一颗棋子" }
+        : draft);
+    expect(acceptanceResultError(scenarios, toAcceptanceResults(sideIssue))).toBeNull();
   });
 });
 

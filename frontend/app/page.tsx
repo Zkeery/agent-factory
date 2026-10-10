@@ -15,7 +15,8 @@ import {
   canRetestInPlace,
   retestFallbackHint,
   canShowAlwaysAllow,
-  DEFAULT_ACCEPTANCE_CHECKLIST,
+  mainFlowScenario,
+  preservedScenarioResults,
   Artifact,
   Decision,
   filterArtifactsForRole,
@@ -79,15 +80,14 @@ import { ProjectDeleteDialog } from "@/components/ProjectDeleteDialog";
 import { ProjectNavigation, ProjectVersionPicker } from "@/components/ProjectNavigation";
 import { DecisionPrompt } from "@/components/DecisionPrompt";
 import { resumeExecution } from "@/lib/agentInsights";
-import { buildFailureRevisionDraft } from "@/lib/acceptanceDraft";
 import { startWorkspaceSync } from "@/lib/workspaceSync";
 import {
   AcceptanceRecord,
   AcceptanceScenariosEditor,
   BundleDownload,
+  MainFlowAcceptance,
   RequirementsForm,
   RevisionForm,
-  ScenarioAcceptancePanel,
 } from "@/components/RunImprovements";
 
 const productMarkdownComponents: Components = {
@@ -254,67 +254,6 @@ function TaskList({
 }
 
 /* ---------- 中栏：消息气泡 ---------- */
-
-/* ---------- 验收清单勾选（PRD §4.1） ---------- */
-function AcceptancePanel({ onAccept, onReject, previousRejection = "", busy }: {
-  onAccept: (checklist: AcceptanceChecklistItem[]) => Promise<void>;
-  onReject: (note: string) => Promise<void>;
-  previousRejection?: string;
-  busy: boolean;
-}) {
-  const [checked, setChecked] = useState<Record<string, boolean>>({});
-  const [error, setError] = useState<string | null>(null);
-  const [rejecting, setRejecting] = useState(!!previousRejection);
-  const [rejectionNote, setRejectionNote] = useState(previousRejection);
-  const allPassed = DEFAULT_ACCEPTANCE_CHECKLIST.every((i) => checked[i.id]);
-  function toggle(id: string) {
-    setChecked((prev) => ({ ...prev, [id]: !prev[id] }));
-  }
-  return (
-    <div className="mt-2 rounded-xl bg-warn-soft p-3 text-sm">
-      <div className="space-y-1.5">
-        {DEFAULT_ACCEPTANCE_CHECKLIST.map((item) => (
-          <label key={item.id} className="flex cursor-pointer items-start gap-2 text-xs" style={{ color: "var(--color-muted)" }}>
-            <input
-              type="checkbox"
-              className="mt-0.5"
-                checked={!!checked[item.id]}
-                disabled={busy}
-              onChange={() => toggle(item.id)}
-            />
-            <span>{item.label}</span>
-          </label>
-        ))}
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-      <button type="button" className="button-secondary" disabled={busy} onClick={() => { setRejecting((value) => !value); setError(null); }}>不通过</button>
-      <button
-        className="rounded-full px-4 py-1.5 text-xs text-[#0a0b0e] disabled:opacity-40"
-        style={{ background: "var(--gradient-brand)" }}
-        disabled={!allPassed || busy}
-        onClick={async () => {
-          setError(null);
-          try { await onAccept(
-            DEFAULT_ACCEPTANCE_CHECKLIST.map((i) => ({
-              id: i.id,
-              label: i.label,
-              passed: !!checked[i.id],
-            })),
-          ); } catch (err) { setError(err instanceof Error ? err.message : "验收未保存，请重试。"); }
-        }}
-      >
-        验收通过，交付
-      </button>
-      </div>
-      {rejecting && <div className="mt-4 space-y-3 border-t border-line pt-4">
-        <label className="block space-y-2 text-xs font-medium"><span>哪里不符合预期？</span><textarea className="input-field min-h-24" rows={3} maxLength={4000} value={rejectionNote} disabled={busy} placeholder="写下你的操作、预期结果和实际遇到的问题，例如：人机对战落下一枚黑子后，AI 一直不落白子。" onChange={(event) => setRejectionNote(event.target.value)} /></label>
-        <p className="text-xs leading-relaxed text-muted">保存问题后准备修复草稿。当前版本保留，修复版完成后重新验收。</p>
-        <button type="button" className="button-secondary" disabled={busy || !rejectionNote.trim()} onClick={async () => { setError(null); try { await onReject(rejectionNote.trim()); } catch (err) { setError(err instanceof Error ? err.message : "问题未保存，请重试。"); } }}>保存问题并准备修复</button>
-      </div>}
-      {error && <p role="alert" className="mt-2 text-xs" style={{ color: "var(--danger)" }}>{error}</p>}
-    </div>
-  );
-}
 
 /* ---------- 决策卡快捷按钮 ---------- */
 function DecisionsInline({ decisions, onAnswer, stage, busy = false }: { decisions: Decision[]; onAnswer: (code: string, value: string) => void; stage: string | null; busy?: boolean }) {
@@ -495,7 +434,7 @@ function SessionRail({
             <>
               <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full" style={{ background: "var(--warn)" }} />
               <span className="text-xs font-medium" style={{ color: "var(--warn)" }}>
-                待验收：在任务验证卡片中记录结果，全部通过后确认交付。
+                待验收：打开成品，确认主流程是否走通。
               </span>
             </>
           )}
@@ -1261,7 +1200,7 @@ export default function Page() {
   const scenarios = useMemo(() => {
     if (run && scenarioDraft?.runId === run.id) return scenarioDraft.items;
     if (run?.acceptance_scenarios?.length) return run.acceptance_scenarios;
-    return [1, 2, 3].map((n) => ({ id: `scenario-${n}`, title: "", input: "", expected_output: "" }));
+    return [{ id: "main-flow", title: "主流程是否走通", input: "", expected_output: "" }];
   }, [run, scenarioDraft]);
   const scenarioDirty = JSON.stringify(scenarios) !== JSON.stringify(run?.acceptance_scenarios || []);
   const scenarioIssue = run?.acceptance_mode === "scenario" ? acceptanceScenarioError(scenarios) : null;
@@ -1555,24 +1494,20 @@ export default function Page() {
     await withMutation("scenarios", async () => { await saveScenarios(scenarios); setScenarioDraft(null); });
   }
 
-  async function handleSaveResults(results: AcceptanceScenarioResult[]) {
-    await withMutation("results", async () => { await saveResults(results); });
-  }
-
-  async function handleRequestRevision(results: AcceptanceScenarioResult[]) {
+  async function handleMainFlowFeedback(note: string, mainPassed: boolean) {
     if (!run) return;
     await withMutation("results", async () => {
-      await saveResults(results);
-      setRevisionDraft({ runId: run.id, text: buildFailureRevisionDraft(run.acceptance_scenarios || [], results), key: crypto.randomUUID() });
-    });
-  }
-
-  async function handleReject(note: string) {
-    if (!run) return;
-    await withMutation("results", async () => {
+      const scenarios = run.acceptance_scenarios || [];
+      const main = mainFlowScenario(scenarios);
+      if (run.acceptance_mode === "scenario" && main) {
+        await saveResults([
+          { scenario_id: main.id, passed: mainPassed, observation: note },
+          ...preservedScenarioResults(scenarios, run.acceptance_results || [], main.id),
+        ]);
+      }
       await rejectRun(run.id, note);
       await restore(run.id);
-      const prefix = "请保留已有功能，修复人工验收未通过的问题（完整原因已保存到父版本）：\n\n";
+      const prefix = "请保留已有功能，按下面的反馈修改：\n\n";
       const limit = 4000 - prefix.length;
       const summary = note.length <= limit ? note : `${note.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/, "")}…`;
       setRevisionDraft({ runId: run.id, text: prefix + summary, key: crypto.randomUUID() });
@@ -1794,20 +1729,20 @@ export default function Page() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 grow basis-[260px]">
                   <div className="mb-2 flex items-center gap-2 text-[11px] text-muted"><span className="status-badge">{run.parent_run_id ? "修改版" : "初版"}</span><span>{runList.find((item) => item.id === run.id)?.created_at ? formatApiDate(runList.find((item) => item.id === run.id)!.created_at) : "当前项目"}</span><span>·</span><span>{pmStageLabel(run.current_stage)}</span></div>
-                  <h1 className="text-xl font-semibold leading-8 tracking-tight">{run.status === "paused" ? "任务已暂停，可以从检查点继续" : run.current_stage === "awaiting_answers" ? "先把关键需求聊清楚" : run.current_stage === "awaiting_prd_confirm" ? "确认这一版要做什么" : run.current_stage === "awaiting_acceptance" ? "用真实任务，验证这一版" : run.current_stage === "delivered" ? "这一版已完成交付" : ["failed", "gate_failed", "cancelled"].includes(run.current_stage) ? "构建需要你的关注" : "正在把想法变成应用"}</h1>
-                  <p className="mt-1 text-xs leading-6 text-muted">{run.current_stage === "awaiting_answers" ? "一次回答一个问题。选择方向，或直接写下你的想法。" : run.current_stage === "awaiting_prd_confirm" ? "在成果区核对需求，在这里补充修改并确认验收场景。" : run.current_stage === "awaiting_acceptance" ? "打开成品，逐项记录实际结果。发现问题后可以继续修改。" : run.current_stage === "delivered" ? "下载包含源码、需求文档和验证记录的交付包，或继续打磨下一版。" : "阶段进度会自动更新，生成的需求、代码和说明统一放在成果区。"}</p>
+                  <h1 className="text-xl font-semibold leading-8 tracking-tight">{run.status === "paused" ? "任务已暂停，可以从检查点继续" : run.current_stage === "awaiting_answers" ? "先把关键需求聊清楚" : run.current_stage === "awaiting_prd_confirm" ? "确认这一版要做什么" : run.current_stage === "awaiting_acceptance" ? "确认主流程是否走通" : run.current_stage === "delivered" ? "这一版已完成交付" : ["failed", "gate_failed", "cancelled"].includes(run.current_stage) ? "构建需要你的关注" : "正在把想法变成应用"}</h1>
+                  <p className="mt-1 text-xs leading-6 text-muted">{run.current_stage === "awaiting_answers" ? "一次回答一个问题。选择方向，或直接写下你的想法。" : run.current_stage === "awaiting_prd_confirm" ? "在成果区核对需求，在这里确认主流程怎么走通。" : run.current_stage === "awaiting_acceptance" ? "打开成品，走一遍主流程。走通了就可以验收；没走通或还有其他问题，写在反馈里再改一版。" : run.current_stage === "delivered" ? "下载包含源码、需求文档和验证记录的交付包，或继续打磨下一版。" : "阶段进度会自动更新，生成的需求、代码和说明统一放在成果区。"}</p>
                 </div>
                 {["awaiting_acceptance", "delivered"].includes(run.current_stage) && <div className="flex flex-wrap gap-2"><button className="button-primary" onClick={handlePreview}><ArrowUpRight size={15} />打开成品</button><button className="button-secondary" onClick={() => { const field = document.querySelector<HTMLTextAreaElement>("#revision-form textarea"); field?.scrollIntoView({ behavior: "smooth", block: "center" }); field?.focus({ preventScroll: true }); }}><GitBranch size={15} />提出修改</button></div>}
               </div>
               {run.execution_mode === "agent_team" && run.status === "paused" && <div className="wf-card flex flex-wrap items-center justify-between gap-3 p-5"><div><p className="text-sm font-medium">处理已中断</p><p className="mt-1 text-xs leading-6 text-muted">已保留当前进度，可以继续完成这一版。</p></div><button className="button-primary" disabled={!!actionBusy} onClick={() => { void handleResume().catch(showActionError); }}>{actionBusy === "resume" ? "正在继续…" : "继续处理"}<ArrowRight size={14} /></button></div>}
-              {run.current_stage === "awaiting_prd_confirm" && run.acceptance_mode === "scenario" && <div className="flex gap-5 border-b border-line" role="tablist" aria-label="构建前确认"><button role="tab" aria-selected={reviewTab === "requirements"} className={cn("border-b-2 px-1 pb-3 text-xs", reviewTab === "requirements" ? "border-brand font-semibold text-brand" : "border-transparent text-muted")} onClick={() => setReviewTab("requirements")}>需求确认</button><button role="tab" aria-selected={reviewTab === "scenarios"} className={cn("border-b-2 px-1 pb-3 text-xs", reviewTab === "scenarios" ? "border-brand font-semibold text-brand" : "border-transparent text-muted")} onClick={() => setReviewTab("scenarios")}>验收场景 <span className="ml-1 rounded bg-surface-2 px-1.5 py-0.5 text-[10px]">{scenarios.length}</span>{scenarioDirty && <span className="ml-1 text-warn">· 未保存</span>}</button></div>}
+              {run.current_stage === "awaiting_prd_confirm" && run.acceptance_mode === "scenario" && <div className="flex gap-5 border-b border-line" role="tablist" aria-label="构建前确认"><button role="tab" aria-selected={reviewTab === "requirements"} className={cn("border-b-2 px-1 pb-3 text-xs", reviewTab === "requirements" ? "border-brand font-semibold text-brand" : "border-transparent text-muted")} onClick={() => setReviewTab("requirements")}>需求确认</button><button role="tab" aria-selected={reviewTab === "scenarios"} className={cn("border-b-2 px-1 pb-3 text-xs", reviewTab === "scenarios" ? "border-brand font-semibold text-brand" : "border-transparent text-muted")} onClick={() => setReviewTab("scenarios")}>主流程{scenarioDirty && <span className="ml-1 text-warn">· 未保存</span>}</button></div>}
               {run.current_stage === "awaiting_answers" && currentQuestion && <DecisionPrompt key={`${run.id}-${currentQuestion.code}`} decision={currentQuestion} questionNumber={questionCount - pendingQuestions.length + 1} totalQuestions={questionCount} busy={!!actionBusy} onAnswer={handleAnswer} />}
               {run.current_stage === "awaiting_prd_confirm" && (reviewTab === "requirements" || run.acceptance_mode !== "scenario") && <div className="xl:hidden"><button type="button" onClick={() => openOutput("prd")} className="button-secondary"><FolderOpen size={16} />查看需求文档</button></div>}
               {(run.current_stage === "awaiting_answers" || run.current_stage === "awaiting_prd_confirm") && <div hidden={run.current_stage === "awaiting_prd_confirm" && run.acceptance_mode === "scenario" && reviewTab !== "requirements"}><details className="rounded-xl border border-line bg-panel"><summary className="cursor-pointer px-5 py-4 text-xs font-medium text-muted">{run.current_stage === "awaiting_answers" ? "补充整体需求或约束" : "这版需求需要调整？"}</summary><div className="border-t border-line p-4"><RequirementsForm key={`requirements-${run.id}`} busy={!!actionBusy} onSubmit={handleRequirements} /></div></details></div>}
               {run.current_stage === "awaiting_prd_confirm" && reviewTab === "requirements" && <details className="rounded-xl border border-line bg-panel"><summary className="cursor-pointer px-5 py-4 text-xs font-medium text-muted">修改已确认的决策</summary><div className="border-t border-line p-5"><DecisionsInline decisions={run.decisions} onAnswer={handleAnswer} stage={run.current_stage} busy={!!actionBusy} /></div></details>}
               {run.acceptance_mode === "scenario" && run.current_stage === "awaiting_prd_confirm" && reviewTab === "scenarios" && <AcceptanceScenariosEditor key={`scenarios-${run.id}`} scenarios={scenarios} dirty={scenarioDirty} busy={!!actionBusy} onChange={(items) => setScenarioDraft({ runId: run.id, items })} onSave={handleSaveScenarios} />}
               {run.current_stage === "awaiting_prd_confirm" && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-panel p-4"><div><div className="text-sm font-medium">需求与验收场景准备好了？</div><p className="mt-1 text-xs text-muted">{confirmHint || "确认后将按当前需求构建，后续仍可继续迭代。"}</p></div><button className="button-primary" disabled={!!actionBusy || !!confirmHint} onClick={handleConfirm}>确认需求，开始构建<ArrowRight size={15} /></button></div>}
-              {run.current_stage === "awaiting_acceptance" && (run.acceptance_mode === "scenario" ? <ScenarioAcceptancePanel key={run.id} run={run} busy={!!actionBusy} onAccept={handleAccept} onSave={handleSaveResults} onRequestRevision={handleRequestRevision} /> : <AcceptancePanel key={run.id} onAccept={handleAccept} onReject={handleReject} previousRejection={run.acceptance_note === "验收通过" ? "" : run.acceptance_note || ""} busy={!!actionBusy} />)}
+              {run.current_stage === "awaiting_acceptance" && <MainFlowAcceptance key={run.id} run={run} busy={!!actionBusy} onAccept={handleAccept} onFeedback={handleMainFlowFeedback} />}
               {run.current_stage === "delivered" && <AcceptanceRecord run={run} />}
               <BundleDownload key={`bundle-${run.id}`} run={run} />
               {canReviseRun(run) && <RevisionForm key={`revision-${run.id}-${revisionDraft?.runId === run.id ? revisionDraft.key : "manual"}`} initialText={revisionDraft?.runId === run.id ? revisionDraft.text : ""} busy={!!actionBusy} onSubmit={handleRevise} />}

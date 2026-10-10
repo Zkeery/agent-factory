@@ -118,7 +118,10 @@ def generate_prd(idea: str, decisions: list[dict[str, Any]], source_context: dic
     business_task = _mock_business_task(idea)
     output_type = _mock_output_type(idea, (source_context or {}).get("prd", {}).get("output_type"))
     labels = {"text": "文本结果", "image": "图片", "video": "可播放视频", "other": "交互工具的操作结果"}
-    cases = generate_acceptance_scenarios(idea, {"output_type": output_type})
+    cases = [
+        {"title": title, "input": value, "expected_output": expected}
+        for title, value, expected in _example_cases(idea)
+    ]
     decisions_text = "\n".join(
         f"- 决策 {d['code']}：{d['question'] or d['code']} → {d['answer'] or '未回答'}"
         + (f"（待确认：{d['answer_gap']}）" if d.get("answer_gap") else "")
@@ -200,8 +203,8 @@ def generate_prd(idea: str, decisions: list[dict[str, Any]], source_context: dic
     return validate_generated_prd(normalize_prd_fields(raw))
 
 
-def generate_acceptance_scenarios(idea: str, prd: dict) -> list[dict]:
-    """离线示例场景；使用具体业务输入，供用户在 PRD 确认前改成自己的样例。"""
+def _example_cases(idea: str) -> list[tuple[str, str, str]]:
+    """需求文档里的对照用例。用户验收不逐条提问，只取主流程那一条。"""
     task = idea.split("\n", 1)[0].strip()[:100]
     idea = _mock_business_task(idea)
     if any(word in idea for word in ("待办", "事项清单", "todo")):
@@ -246,10 +249,19 @@ def generate_acceptance_scenarios(idea: str, prd: dict) -> list[dict]:
             ("处理带约束的同类输入", f"按「{task}」处理：本次只供个人使用，预算0元，结果限3条。", "输出遵守个人使用、0元、最多3条约束，不扩展成团队或付费方案"),
             ("缺少任务材料", "输入留空后提交", "提示补充必要输入，不生成虚构业务结果"),
         ]
-    return [
-        {"id": f"scenario-{i + 1}", "title": title, "input": value, "expected_output": expected}
-        for i, (title, value, expected) in enumerate(cases)
-    ]
+    return cases
+
+
+def generate_acceptance_scenarios(idea: str, prd: dict) -> list[dict]:
+    """用户确认和试用时只保留主流程一条。需求文档仍用完整对照用例。"""
+    _ = prd
+    _title, value, expected = _example_cases(idea)[0]
+    return [{
+        "id": "main-flow",
+        "title": "主流程是否走通",
+        "input": value,
+        "expected_output": expected,
+    }]
 
 
 def _safe_comment(idea: str) -> str:

@@ -4,24 +4,19 @@ import { useRef, useState } from "react";
 import {
   AlertCircle, ArrowRight, Check, CheckCircle2, ChevronDown, ClipboardCheck,
   Code2, Download, FileText, FolderArchive, GitBranch, ListChecks, Loader2,
-  MessageSquareText, Plus, RotateCcw, Save, ShieldCheck, Trash2, type LucideIcon,
+  MessageSquareText, Save, type LucideIcon,
 } from "lucide-react";
 import {
-  acceptanceResultError,
   acceptanceScenarioError,
   DEFAULT_ACCEPTANCE_CHECKLIST,
   downloadRunBundle,
+  mainFlowScenario,
+  preservedScenarioResults,
   type AcceptanceChecklistItem,
   type AcceptanceScenario,
   type AcceptanceScenarioResult,
   type Run,
 } from "@/lib/factory";
-import {
-  acceptanceDraftSaveError,
-  createAcceptanceDrafts,
-  toAcceptanceResults,
-  type AcceptanceDraft,
-} from "@/lib/acceptanceDraft";
 
 const fieldClass = "input-field w-full rounded-lg border px-3 py-2.5 text-[13px] leading-relaxed outline-none transition-shadow placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/10 disabled:cursor-not-allowed disabled:opacity-50";
 const fieldStyle = { borderColor: "var(--color-line, #e7eaf0)", background: "var(--paper)", color: "var(--ink, #182230)" };
@@ -34,8 +29,6 @@ const cardStyle = { borderColor: "var(--color-line, #e7eaf0)", background: "var(
 const mutedStyle = { color: "var(--color-muted, #737f91)" };
 const lineStyle = { borderColor: "var(--color-line, #e7eaf0)" };
 const labelClass = "block space-y-1.5 text-xs font-medium";
-const checkboxClass = "h-4 w-4 shrink-0 cursor-pointer rounded border-line accent-brand disabled:cursor-not-allowed";
-
 function PanelHeader({ icon: Icon, title, description, badge }: { icon: LucideIcon; title: string; description: string; badge?: string }) {
   return (
     <div className="wf-card-header flex items-start gap-3 border-b px-5 py-4" style={lineStyle}>
@@ -159,16 +152,20 @@ export function AcceptanceScenariosEditor({ scenarios, dirty, busy, onChange, on
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const main = mainFlowScenario(scenarios);
+  const mainIndex = main ? scenarios.findIndex((item) => item.id === main.id) : -1;
+  const extraCount = scenarios.filter((item) => item.id !== main?.id).length;
   const validation = acceptanceScenarioError(scenarios);
-  const update = (index: number, field: "title" | "input" | "expected_output", value: string) => {
+  const update = (field: "title" | "input" | "expected_output", value: string) => {
+    if (mainIndex < 0) return;
     setSaved(false);
-    onChange(scenarios.map((item, i) => i === index ? { ...item, [field]: value } : item));
+    onChange(scenarios.map((item, index) => index === mainIndex ? { ...item, [field]: value } : item));
   };
 
   return (
     <form className={cardClass} style={cardStyle} onSubmit={async (event) => {
       event.preventDefault();
-      if (busy || validation) return;
+      if (busy || validation || !main) return;
       setError(null);
       try {
         await onSave();
@@ -177,95 +174,87 @@ export function AcceptanceScenariosEditor({ scenarios, dirty, busy, onChange, on
         setError(err instanceof Error ? err.message : "验收场景未保存，请重试。");
       }
     }}>
-      <PanelHeader icon={ListChecks} title="约定验证任务" badge={`${scenarios.length} 个场景`} description="至少 3 个具体场景，明确输入与预期结果。成品完成后，按这些任务逐项验证。" />
+      <PanelHeader icon={ListChecks} title="约定主流程" badge="只问这一件事" description="写清主流程怎么操作、怎样算走通。成品完成后只问这一件事。需求文档里的其他验收标准仍保留，验收时不再逐条提问。" />
       <div className="wf-card-body space-y-4 p-5">
-        <div className="space-y-4">
-          {scenarios.map((item, index) => (
-            <fieldset key={item.id} className="overflow-hidden rounded-lg border bg-surface-2" style={lineStyle} disabled={busy}>
-              <legend className="sr-only">场景 {index + 1}</legend>
-              <div className="flex items-center justify-between border-b px-3.5 py-2.5" style={lineStyle}>
-                <div className="flex items-center gap-2 text-xs font-medium"><span className="inline-flex h-5 w-5 items-center justify-center rounded bg-surface-2 text-[10px] tabular-nums text-muted">{String(index + 1).padStart(2, "0")}</span>验证任务</div>
-                {scenarios.length > 3 && <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-muted hover:bg-danger-soft hover:text-danger" onClick={() => { setSaved(false); onChange(scenarios.filter((_, i) => i !== index)); }}><Trash2 size={12} aria-hidden="true" />移除场景 {index + 1}</button>}
-              </div>
-              <div className="space-y-3 p-3.5">
+        {main ? (
+          <fieldset className="overflow-hidden rounded-lg border bg-surface-2" style={lineStyle} disabled={busy}>
+            <legend className="sr-only">主流程</legend>
+            <div className="space-y-3 p-3.5">
+              <label className={labelClass}>
+                <span>主流程名称</span>
+                <input className={fieldClass} style={fieldStyle} value={main.title} maxLength={200} onChange={(event) => update("title", event.target.value)} />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
                 <label className={labelClass}>
-                  <span>场景 {index + 1} 名称</span>
-                  <input className={fieldClass} style={fieldStyle} value={item.title} maxLength={200} onChange={(event) => update(index, "title", event.target.value)} />
+                  <span>主流程怎么操作</span>
+                  <textarea className={fieldClass} style={fieldStyle} rows={3} value={main.input} maxLength={2000} onChange={(event) => update("input", event.target.value)} />
                 </label>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className={labelClass}>
-                    <span>场景 {index + 1} 输入</span>
-                    <textarea className={fieldClass} style={fieldStyle} rows={3} value={item.input} maxLength={2000} onChange={(event) => update(index, "input", event.target.value)} />
-                  </label>
-                  <label className={labelClass}>
-                    <span>场景 {index + 1} 预期结果</span>
-                    <textarea className={fieldClass} style={fieldStyle} rows={3} value={item.expected_output} maxLength={2000} onChange={(event) => update(index, "expected_output", event.target.value)} />
-                  </label>
-                </div>
+                <label className={labelClass}>
+                  <span>主流程预期结果</span>
+                  <textarea className={fieldClass} style={fieldStyle} rows={3} value={main.expected_output} maxLength={2000} onChange={(event) => update("expected_output", event.target.value)} />
+                </label>
               </div>
-            </fieldset>
-          ))}
-        </div>
-        <button type="button" className={`${secondaryClass} w-full border-dashed`} style={secondaryStyle} disabled={busy || scenarios.length >= 10}
-          onClick={() => { setSaved(false); onChange([...scenarios, { id: crypto.randomUUID(), title: "", input: "", expected_output: "" }]); }}><Plus size={14} aria-hidden="true" />增加场景</button>
+            </div>
+          </fieldset>
+        ) : <p className="text-xs leading-relaxed" style={mutedStyle}>请写清主流程：怎么操作，以及怎样算走通。</p>}
+        {extraCount > 0 && <p className="text-xs leading-relaxed" style={mutedStyle}>这一版还留着更早的 {extraCount} 条场景。验收时不再逐条提问，保存时会一并保留。</p>}
         {validation && <p className="text-xs leading-relaxed" style={mutedStyle}>{validation}</p>}
         <ErrorMessage message={error} />
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-surface-2 px-5 py-3" style={lineStyle}>
-        <span role="status" className="flex items-center gap-1.5 text-[11px]" style={dirty ? { color: "var(--warn)" } : mutedStyle}>{dirty ? <span className="h-1.5 w-1.5 rounded-full bg-[#d69c35]" /> : <CheckCircle2 size={13} aria-hidden="true" />}{dirty ? "有未保存的修改，保存后再确认 PRD。" : saved ? "验收场景已保存。" : "场景已保存，可确认 PRD。"}</span>
+        <span role="status" className="flex items-center gap-1.5 text-[11px]" style={dirty ? { color: "var(--warn)" } : mutedStyle}>{dirty ? <span className="h-1.5 w-1.5 rounded-full bg-[#d69c35]" /> : <CheckCircle2 size={13} aria-hidden="true" />}{dirty ? "有未保存的修改，保存后再确认需求。" : saved ? "主流程已保存。" : "主流程已保存，可确认需求。"}</span>
         <button className={buttonClass} style={buttonStyle} disabled={busy || !!validation || !dirty} type="submit"><ButtonIcon busy={busy} icon={Save} />{busy ? "保存中…" : "保存验收场景"}</button>
       </div>
     </form>
   );
 }
 
-export function ScenarioAcceptancePanel({ run, busy, onAccept, onSave, onRequestRevision }: {
+export function MainFlowAcceptance({ run, busy, onAccept, onFeedback }: {
   run: Run;
   busy: boolean;
   onAccept: (checklist: AcceptanceChecklistItem[], results: AcceptanceScenarioResult[]) => Promise<void>;
-  onSave: (results: AcceptanceScenarioResult[]) => Promise<void>;
-  onRequestRevision: (results: AcceptanceScenarioResult[]) => Promise<void>;
+  onFeedback: (note: string, mainPassed: boolean) => Promise<void>;
 }) {
   const scenarios = run.acceptance_scenarios || [];
-  const [drafts, setDrafts] = useState(() => createAcceptanceDrafts(scenarios, run.acceptance_results));
-  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const main = mainFlowScenario(scenarios);
+  const scenarioMode = run.acceptance_mode === "scenario";
+  const extraCount = scenarios.filter((item) => item.id !== main?.id).length;
+  const [choice, setChoice] = useState<"passed" | "failed" | null>(null);
+  const [note, setNote] = useState(() => run.acceptance_note && run.acceptance_note !== "验收通过" ? run.acceptance_note : "");
   const [error, setError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<"save" | "repair" | "accept" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"accept" | "feedback" | null>(null);
   const actionPending = useRef(false);
-  const results = toAcceptanceResults(drafts);
-  const draftValidation = acceptanceDraftSaveError(drafts);
-  const validation = draftValidation || acceptanceResultError(scenarios, results);
   const disabled = busy || pendingAction !== null;
-  const allChecked = DEFAULT_ACCEPTANCE_CHECKLIST.every((item) => checked[item.id]);
-  const passedCount = drafts.filter((item) => item.status === "passed").length;
-  const failedCount = drafts.filter((item) => item.status === "failed").length;
-  const untestedCount = drafts.filter((item) => item.status === "untested").length;
-  const update = (id: string, patch: Partial<AcceptanceDraft>) => {
-    setSavedMessage(null);
-    setError(null);
-    setChecked({});
-    setDrafts((previous) => previous.map((item) => item.scenario_id === id ? { ...item, ...patch } : item));
-  };
+  const feedback = note.trim();
+  const canAccept = choice === "passed" && !(scenarioMode && !main);
+  const canFeedback = choice !== null && feedback.length > 0;
 
-  async function performAction(action: "save" | "repair" | "accept") {
-    if (busy || actionPending.current) return;
-    if (draftValidation) { setError(draftValidation); return; }
-    if (action === "repair" && !failedCount) return;
-    if (action === "accept" && (validation || !allChecked)) return;
+  function mainResults(passed: boolean, observation: string): AcceptanceScenarioResult[] {
+    if (!scenarioMode || !main) return [];
+    return [
+      { scenario_id: main.id, passed, observation },
+      ...preservedScenarioResults(scenarios, run.acceptance_results || [], main.id),
+    ];
+  }
+
+  async function perform(action: "accept" | "feedback") {
+    if (disabled || actionPending.current) return;
+    if (action === "accept" && !canAccept) return;
+    if (action === "feedback" && !canFeedback) return;
     actionPending.current = true;
     setPendingAction(action);
     setError(null);
     setSavedMessage(null);
     try {
       if (action === "accept") {
-        await onAccept(DEFAULT_ACCEPTANCE_CHECKLIST.map((item) => ({ ...item, passed: !!checked[item.id] })), results);
-      } else if (action === "repair") {
-        await onRequestRevision(results);
-        setSavedMessage("记录已保存，修复要求已准备好。请在修改区确认后生成修复版。");
+        await onAccept(
+          DEFAULT_ACCEPTANCE_CHECKLIST.map((item) => ({ id: item.id, label: item.label, passed: true })),
+          mainResults(true, feedback || "主流程走通"),
+        );
       } else {
-        await onSave(results);
-        setSavedMessage("试用记录已保存，刷新后可以继续验证。本次保存不会完成交付。");
+        await onFeedback(feedback, choice === "passed");
+        setSavedMessage("反馈已保存。请在下方确认修改要求，再创建修改版。");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "操作未完成，请重试。");
@@ -275,74 +264,48 @@ export function ScenarioAcceptancePanel({ run, busy, onAccept, onSave, onRequest
     }
   }
 
+  const hint = choice === null
+    ? "先确认主流程是否走通。"
+    : choice === "failed"
+      ? (feedback ? "反馈会留下来，确认后才创建修改版。" : "写下没走通的地方，再准备修改版。")
+      : "主流程走通就可以交付。如果还有其他问题，写在反馈里再准备修改版。";
+
   return (
-    <form className={cardClass} style={{ ...cardStyle, overflow: "clip" }} onSubmit={(event) => {
-      event.preventDefault();
-      void performAction("accept");
-    }}>
-      <PanelHeader icon={ClipboardCheck} title="真实任务验证" badge="人工验收" description="打开成品实际操作，选择通过或不通过，并填写实际结果。" />
-      <div className="wf-card-body space-y-5 p-5">
-        <div className="sticky top-0 z-10 space-y-3 rounded-lg border bg-panel p-3 shadow-sm" style={lineStyle}>
-        <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs" aria-live="polite">
-          <span className="text-muted">未验证 <b className="ml-1 tabular-nums">{untestedCount}</b></span>
-          <span className="text-ok">通过 <b className="ml-1 tabular-nums">{passedCount}</b></span>
-          <span className={failedCount ? "text-danger" : "text-muted"}>不通过 <b className="ml-1 tabular-nums">{failedCount}</b></span>
+    <form className={cardClass} style={cardStyle} onSubmit={(event) => { event.preventDefault(); void perform("accept"); }}>
+      <PanelHeader icon={ClipboardCheck} title="主流程是否走通" badge="人工验收" description="打开成品，按下面的主流程走一遍。走通了就可以验收；没走通或还有其他问题，写在反馈里。" />
+      <div className="wf-card-body space-y-4 p-5">
+        {main && (
+          <dl className="grid gap-3 rounded-lg bg-surface-2 p-3 text-xs leading-relaxed sm:grid-cols-2">
+            <div className="min-w-0 sm:col-span-2"><dt className="mb-1 text-[10px] font-medium text-muted">主流程</dt><dd className="font-medium">{main.title}</dd></div>
+            <div className="min-w-0"><dt className="mb-1 text-[10px] font-medium text-muted">怎么操作</dt><dd className="whitespace-pre-wrap break-words">{main.input}</dd></div>
+            <div className="min-w-0"><dt className="mb-1 text-[10px] font-medium text-muted">怎样算走通</dt><dd className="whitespace-pre-wrap break-words">{main.expected_output}</dd></div>
+          </dl>
+        )}
+        {extraCount > 0 && <p className="text-xs leading-relaxed" style={mutedStyle}>更早的其他场景仍保存在记录里，这次不再逐条提问。</p>}
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="主流程是否走通">
+          {([
+            { value: "passed", label: "走通了" },
+            { value: "failed", label: "没走通" },
+          ] as const).map((option) => (
+            <label key={option.value} className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 py-3 text-xs ${choice === option.value ? option.value === "failed" ? "border-danger/30 bg-danger-soft text-danger" : "border-ok/30 bg-ok-soft text-ok" : "border-line bg-panel text-muted"}`}>
+              <input type="radio" name={`main-flow-${run.id}`} value={option.value} checked={choice === option.value} disabled={disabled} className="h-3.5 w-3.5 shrink-0 accent-brand" onChange={() => { setChoice(option.value); setSavedMessage(null); setError(null); }} />
+              {option.label}
+            </label>
+          ))}
         </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className={`${secondaryClass} w-full sm:w-auto`} style={secondaryStyle} disabled={disabled} onClick={() => void performAction("save")}><ButtonIcon busy={pendingAction === "save"} icon={Save} />{pendingAction === "save" ? "保存中…" : "保存试用记录"}</button>
-            <button type="button" className={`${failedCount ? buttonClass : secondaryClass} w-full sm:w-auto`} style={failedCount ? buttonStyle : secondaryStyle} disabled={disabled || !failedCount} onClick={() => void performAction("repair")}><ButtonIcon busy={pendingAction === "repair"} icon={RotateCcw} />{pendingAction === "repair" ? "准备修复要求…" : "修复未通过场景"}</button>
-          </div>
-          <p className="text-[11px] leading-relaxed text-muted">{failedCount ? "修复会先保存记录，再准备修改要求；确认后创建新版本。" : "保存后可继续验证，不会自动交付。"}</p>
-          {savedMessage && <SavedMessage>{savedMessage}</SavedMessage>}
-          <ErrorMessage message={error} />
-        </div>
-        <div className="space-y-4">
-          {scenarios.map((item, index) => {
-            const draft = drafts.find((entry) => entry.scenario_id === item.id);
-            return (
-              <fieldset key={item.id} className="min-w-0 overflow-hidden rounded-lg border" style={{ borderColor: draft?.status === "failed" ? "var(--danger)" : "var(--color-line, #e7eaf0)" }} disabled={disabled}>
-                <legend className="sr-only">{index + 1}. {item.title}</legend>
-                <div className="flex items-center justify-between gap-3 border-b bg-surface-2 px-4 py-3" style={lineStyle}>
-                  <div className="flex min-w-0 items-center gap-2.5"><span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border bg-panel text-[10px] font-medium tabular-nums text-muted" style={lineStyle}>{String(index + 1).padStart(2, "0")}</span><h4 className="text-xs font-semibold leading-relaxed">{item.title}</h4></div>
-                </div>
-                <div className="space-y-4 p-4">
-                  <dl className="grid gap-3 rounded-lg bg-surface-2 p-3 text-xs leading-relaxed sm:grid-cols-2">
-                    <div className="min-w-0"><dt className="mb-1 text-[10px] font-medium text-muted">任务输入</dt><dd className="whitespace-pre-wrap break-words">{item.input}</dd></div>
-                    <div className="min-w-0"><dt className="mb-1 text-[10px] font-medium text-muted">预期结果</dt><dd className="whitespace-pre-wrap break-words">{item.expected_output}</dd></div>
-                  </dl>
-                  <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label={`场景 ${index + 1} 验证结果`}>
-                    {([
-                      { value: "untested", label: "未验证" },
-                      { value: "passed", label: "通过" },
-                      { value: "failed", label: "不通过" },
-                    ] as const).map((option) => (
-                      <label key={option.value} className={`flex min-w-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg border px-2 py-2.5 text-xs ${draft?.status === option.value ? option.value === "failed" ? "border-danger/30 bg-danger-soft text-danger" : option.value === "passed" ? "border-ok/30 bg-ok-soft text-ok" : "border-line bg-surface-2 text-ink" : "border-line bg-panel text-muted"}`}>
-                        <input type="radio" name={`scenario-${run.id}-${item.id}`} value={option.value} checked={(draft?.status || "untested") === option.value} className="h-3.5 w-3.5 shrink-0 accent-brand" onChange={() => update(item.id, { status: option.value })} />
-                        {option.label}
-                      </label>
-                    ))}
-                  </div>
-                  <label className={labelClass}>
-                    <span>场景 {index + 1} 实际结果</span>
-                    <textarea className={fieldClass} style={fieldStyle} rows={3} maxLength={4000} value={draft?.observation || ""}
-                      placeholder={draft?.status === "failed" ? "记录失败现象、错误提示，或与预期不一致的结果。" : "记录实际输出、操作结果或遇到的问题。"}
-                      onChange={(event) => update(item.id, { observation: event.target.value })} />
-                  </label>
-                </div>
-              </fieldset>
-            );
-          })}
-        </div>
+        <label className={labelClass}>
+          <span>反馈</span>
+          <textarea className={fieldClass} style={fieldStyle} rows={4} maxLength={4000} value={note} disabled={disabled}
+            placeholder="主流程没走通，或还有其他问题，写在这里。例如：记了一笔支出后，余额没有按预期变化。"
+            onChange={(event) => { setNote(event.target.value); setSavedMessage(null); }} />
+        </label>
+        <p className="text-[11px] leading-relaxed" style={mutedStyle}>{hint}</p>
+        {savedMessage && <SavedMessage>{savedMessage}</SavedMessage>}
+        <ErrorMessage message={error} />
       </div>
-      <div className="space-y-4 border-t bg-surface-2 p-5" style={lineStyle}>
-        <div className="flex items-start gap-2.5"><ShieldCheck size={17} className="mt-0.5 shrink-0 text-brand" aria-hidden="true" /><div><h4 className="text-sm font-semibold">确认交付</h4><p className="mt-1 text-[11px] leading-relaxed" style={mutedStyle}>全部场景验证通过后，完成以下确认，保存正式验收记录。</p></div></div>
-        <div className="space-y-2.5 text-xs">
-          {DEFAULT_ACCEPTANCE_CHECKLIST.map((item) => <label key={item.id} className="flex cursor-pointer items-start gap-2.5 leading-relaxed"><input className={`${checkboxClass} mt-0.5`} type="checkbox" checked={!!checked[item.id]} disabled={disabled || !!validation} onChange={(event) => setChecked((previous) => ({ ...previous, [item.id]: event.target.checked }))} />{item.label}</label>)}
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4" style={lineStyle}>
-          <p className="min-w-0 flex-1 text-[11px] leading-relaxed" style={mutedStyle}>{validation || (!allChecked ? "请完成上方交付确认。" : "所有验证与确认已完成，可以交付。")}</p>
-          <button className={buttonClass} style={buttonStyle} disabled={disabled || !!validation || !allChecked} type="submit"><ButtonIcon busy={pendingAction === "accept"} icon={CheckCircle2} />{pendingAction === "accept" ? "保存验收中…" : "验收通过，交付"}</button>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-2 border-t bg-surface-2 px-5 py-3" style={lineStyle}>
+        <button type="button" className={secondaryClass} style={secondaryStyle} disabled={disabled || !canFeedback} onClick={() => void perform("feedback")}><ButtonIcon busy={pendingAction === "feedback"} icon={GitBranch} />{pendingAction === "feedback" ? "保存反馈…" : "按反馈准备修改版"}</button>
+        <button className={buttonClass} style={buttonStyle} disabled={disabled || !canAccept} type="submit"><ButtonIcon busy={pendingAction === "accept"} icon={CheckCircle2} />{pendingAction === "accept" ? "保存验收中…" : "验收通过，交付"}</button>
       </div>
     </form>
   );

@@ -11,6 +11,11 @@ export function sortProjectVersions(runs: RunSummary[]): RunSummary[] {
   return [...runs].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
 }
 
+/** 序号在创建时确定。隐藏失败版本后不把后面的版本改号，也不把新重跑套回旧号。 */
+export function projectVersionNumber(version: { version_no?: number | null }): number {
+  return version.version_no && version.version_no > 0 ? version.version_no : 1;
+}
+
 /** Group by identity, never by title: two projects can legitimately share a name. */
 export function projectEntries(projects: Project[], runs: RunSummary[]): ProjectEntry[] {
   const entries = new Map<string, ProjectEntry>(projects.map((project) => [

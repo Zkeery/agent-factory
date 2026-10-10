@@ -90,6 +90,8 @@ export interface Run {
   llm_model?: string;
   auto_schedule_id?: string | null;
   parent_run_id?: string | null;
+  version_no?: number;
+  superseded_by_run_id?: string | null;
   change_request?: string;
   requirement_feedback?: RequirementFeedback[];
   acceptance_mode?: "basic" | "scenario";
@@ -122,6 +124,7 @@ export interface RunSummary {
   project_id?: string | null;
   auto_schedule_id?: string | null;
   parent_run_id?: string | null;
+  version_no?: number;
 }
 
 export interface RunList {
@@ -258,11 +261,27 @@ export const saveAcceptanceResults = (id: string, scenarioResults: AcceptanceSce
     body: JSON.stringify({ scenario_results: scenarioResults }),
   });
 
+export function mainFlowScenario(scenarios: AcceptanceScenario[]): AcceptanceScenario | undefined {
+  return scenarios.find((item) => item.id === "main-flow")
+    ?? scenarios.find((item) => /主流程|主链路|主路径/.test(item.title))
+    ?? scenarios[0];
+}
+
+/** 保存或交付主流程时留下历史场景里已经写过的观察，避免把旧记录清掉。 */
+export function preservedScenarioResults(
+  scenarios: AcceptanceScenario[],
+  results: AcceptanceScenarioResult[],
+  mainId: string | undefined,
+): AcceptanceScenarioResult[] {
+  const known = new Set(scenarios.map((item) => item.id));
+  return results.filter((item) => item.scenario_id !== mainId && known.has(item.scenario_id) && item.observation.trim().length > 0);
+}
+
 export function acceptanceScenarioError(scenarios: AcceptanceScenario[]): string | null {
-  if (scenarios.length < 3 || scenarios.length > 10) return "请填写 3–10 个验收场景。";
+  if (scenarios.length < 1 || scenarios.length > 10) return "请写清主流程：怎么操作，以及怎样算走通。";
   if (new Set(scenarios.map((item) => item.id)).size !== scenarios.length) return "场景编号重复，请重新添加该场景。";
   if (scenarios.some((item) => !item.id.trim() || !item.title.trim() || !item.input.trim() || !item.expected_output.trim())) {
-    return "每个场景都需要名称、实际输入和预期结果。";
+    return "主流程需要名称、实际输入和预期结果。";
   }
   if (scenarios.some((item) => item.id.length > 64 || item.title.length > 200 || item.input.length > 2000 || item.expected_output.length > 2000)) {
     return "场景名称最多 200 字，输入和预期结果各最多 2000 字。";
@@ -273,14 +292,27 @@ export function acceptanceScenarioError(scenarios: AcceptanceScenario[]): string
 export function acceptanceResultError(scenarios: AcceptanceScenario[], results: AcceptanceScenarioResult[]): string | null {
   const scenarioError = acceptanceScenarioError(scenarios);
   if (scenarioError) return scenarioError;
+  const main = mainFlowScenario(scenarios);
+  if (!main) return "请先写清主流程怎么操作、怎样算走通。";
   const byId = new Map(results.map((item) => [item.scenario_id, item]));
-  if (byId.size !== results.length || results.length !== scenarios.length || scenarios.some((item) => !byId.has(item.id))) {
-    return "请逐项记录全部验收场景的实际结果。";
-  }
-  if (results.some((item) => !item.observation.trim())) return "请填写每个场景实际看到了什么。";
-  if (results.some((item) => item.observation.length > 4000)) return "每个场景的实际观察最多 4000 字。";
-  if (results.some((item) => !item.passed)) return "仍有场景未通过，请继续修改后再验收。";
+  if (byId.size !== results.length) return "验收记录重复。";
+  const known = new Set(scenarios.map((item) => item.id));
+  if (results.some((item) => !known.has(item.scenario_id))) return "验收记录包含不属于本版本的场景。";
+  if (results.some((item) => !item.observation.trim())) return "已填写的验收记录需要留下实际结果。";
+  if (results.some((item) => item.observation.length > 4000)) return "实际结果最多 4000 字。";
+  const mainResult = byId.get(main.id);
+  if (!mainResult?.passed) return "主流程未通过，请先写下问题并创建修改版。";
   return null;
+}
+
+export async function resolveVisibleRun(id: string, load: (runId: string) => Promise<Run>): Promise<Run> {
+  let current = await load(id);
+  const seen = new Set<string>([id]);
+  while (current.superseded_by_run_id && !seen.has(current.superseded_by_run_id)) {
+    seen.add(current.superseded_by_run_id);
+    current = await load(current.superseded_by_run_id);
+  }
+  return current;
 }
 
 export function canReviseRun(run: Run | null): boolean {
@@ -807,9 +839,7 @@ export const getArtifact = (runId: string, artifactId: number) =>
 
 /** 与后端 DEFAULT_ACCEPTANCE_CHECKLIST 同 id / 文案（PRD §4.1） */
 export const DEFAULT_ACCEPTANCE_CHECKLIST = [
-  { id: "local_run", label: "主路径能按说明在本地跑起来" },
-  { id: "prd_match", label: "PRD 与实现大体一致" },
-  { id: "no_blockers", label: "没有明显阻断性错误" },
+  { id: "local_run", label: "主流程走通了" },
 ] as const;
 
 export type AcceptanceCheckId = (typeof DEFAULT_ACCEPTANCE_CHECKLIST)[number]["id"];
@@ -978,13 +1008,14 @@ export function useFactoryRun() {
       setLogs([]);
       seenEventIdsRef.current = new Set();
       reconnectAttemptRef.current = 0;
-      const r = await getRun(id);
+      const r = await resolveVisibleRun(id, getRun);
       if (runIdRef.current !== id) return;
+      runIdRef.current = r.id;
       applyRun(r);
-      if (typeof window !== "undefined") localStorage.setItem("factory_run_id", id);
+      if (typeof window !== "undefined") localStorage.setItem("factory_run_id", r.id);
       // 未终态且尚未过 PRD 确认，才重连 SSE（PM 路径到 PRD 即止）
       if (!TERMINAL.includes(r.current_stage) && r.status !== "paused" && !isPmComplete(r.current_stage)) {
-        openEvents(id);
+        openEvents(r.id);
       }
     },
     [applyRun, openEvents, closeEvents],

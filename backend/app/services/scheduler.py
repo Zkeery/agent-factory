@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from app.models import FactoryRun, ProductProject, Schedule, SessionLocal, init_db
 from app.services.stages import TERMINAL_STAGES, Stage
+from app.services.version_visibility import next_version_no
 
 logger = logging.getLogger("factory.scheduler")
 
@@ -68,6 +69,7 @@ def _fire(schedule: Schedule, session) -> FactoryRun | None:
         llm_provider="",
         llm_model_snapshot="",
         auto_schedule_id=schedule.id,
+        version_no=next_version_no(session, schedule.project_id),
     )
     session.add(run)
     return run

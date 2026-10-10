@@ -134,7 +134,7 @@ def test_list_runs(client):
     assert r1.json()["id"] in ids
     assert ids.index(r2.json()["id"]) < ids.index(r1.json()["id"])
     for r in runs:
-        assert set(r.keys()) == {"id", "idea", "current_stage", "status", "created_at", "project_id", "auto_schedule_id", "parent_run_id", "execution_mode"}
+        assert set(r.keys()) == {"id", "idea", "current_stage", "status", "created_at", "project_id", "auto_schedule_id", "parent_run_id", "execution_mode", "version_no"}
         assert r["execution_mode"] == "workflow"
         assert r["parent_run_id"] is None
 

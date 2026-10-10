@@ -88,6 +88,11 @@ class FactoryRun(Base):
     acceptance_checklist: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     acceptance_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
     accepted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # 项目内展示序号。隐藏失败版本后不回收、不改已展示版本的号。
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 用户整段重跑失败版本并创建新版本后写入。列表不展示，统计仍计入。
+    superseded_by_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -219,6 +224,7 @@ def _migrate_schema(engine) -> None:
     """轻量迁移：create_all 不更新已有表，这里给老库补列（幂等）。"""
     from sqlalchemy import inspect, text
     inspector = inspect(engine)
+    link_historical_retries = False
     with engine.begin() as conn:
         fr_cols = {c["name"] for c in inspector.get_columns("factory_runs")}
         if "failure_reason" not in fr_cols:
@@ -297,3 +303,19 @@ def _migrate_schema(engine) -> None:
                 conn.execute(text("ALTER TABLE schedules ADD COLUMN last_skipped_at DATETIME"))
             if "last_skip_reason" not in sch_cols:
                 conn.execute(text("ALTER TABLE schedules ADD COLUMN last_skip_reason TEXT DEFAULT ''"))
+        if "version_no" not in fr_cols:
+            conn.execute(text("ALTER TABLE factory_runs ADD COLUMN version_no INTEGER NOT NULL DEFAULT 0"))
+        if "superseded_by_run_id" not in fr_cols:
+            conn.execute(text("ALTER TABLE factory_runs ADD COLUMN superseded_by_run_id VARCHAR(36)"))
+            link_historical_retries = True
+        if "superseded_at" not in fr_cols:
+            conn.execute(text("ALTER TABLE factory_runs ADD COLUMN superseded_at DATETIME"))
+    if link_historical_retries:
+        from sqlalchemy.orm import Session
+
+        from app.services.version_visibility import assign_missing_version_numbers, backfill_replaced_failures
+
+        with Session(engine) as session:
+            assign_missing_version_numbers(session)
+            backfill_replaced_failures(session)
+            session.commit()

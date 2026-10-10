@@ -12,6 +12,7 @@ from app.core.auth import get_current_user, require_api_key
 from app.core.errors import AppError
 from app.models import FactoryRun, ProductProject, Schedule, User
 from app.services.stages import Stage
+from app.services.version_visibility import visible_version_filter
 from app.schemas import (
     CreateProjectRequest,
     ProjectListOut,
@@ -25,7 +26,7 @@ router = APIRouter(prefix="/api/v1", tags=["projects"], dependencies=[Depends(re
 
 
 def _project_out(session: Session, project: ProductProject) -> ProjectOut:
-    count = session.query(FactoryRun).filter(FactoryRun.project_id == project.id).count()
+    count = session.query(FactoryRun).filter(FactoryRun.project_id == project.id, visible_version_filter()).count()
     return ProjectOut(
         id=project.id,
         name=project.name,
@@ -136,7 +137,7 @@ def list_project_runs(project_id: str, session: Session = Depends(get_session), 
     _project_or_404(session, project_id, user)
     runs = (
         session.query(FactoryRun)
-        .filter(FactoryRun.project_id == project_id, FactoryRun.user_id == user.id)
+        .filter(FactoryRun.project_id == project_id, FactoryRun.user_id == user.id, visible_version_filter())
         .order_by(FactoryRun.created_at.desc())
         .all()
     )
@@ -149,6 +150,7 @@ def list_project_runs(project_id: str, session: Session = Depends(get_session), 
                 status=r.status,
                 created_at=r.created_at,
                 project_id=r.project_id,
+                version_no=r.version_no or 0,
             )
             for r in runs
         ]
