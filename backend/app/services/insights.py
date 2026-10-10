@@ -13,6 +13,7 @@ from app.core.errors import AppError
 from app.models import FactoryRun, ProductProject, RunMetric, StageEvent
 from app.services.project_lifecycle import active_run_filter
 from app.services.metrics import configured_currency, pricing_snapshots, run_source
+from app.services.version_visibility import visible_parent_ids
 
 SOURCES = {"real", "mock", "unknown", "all"}
 DAYS = {"7", "30", "90", "all"}
@@ -274,6 +275,15 @@ def build_review(session: Session, user_id: str, *, source: str = "real", days: 
         notes.append(f"{missing_baselines} 条修改版缺少父快照中的实际观察，未生成迭代效果结论。")
     if duplicate_metrics:
         notes.append(f"队列内 {duplicate_metrics} 条 Run 存在多条累计度量记录，未任选或相加，以免重复计数。")
+    shown_rows = [row for row, run in zip(rows, runs) if not run.superseded_by_run_id]
+    hidden_from_list = len(rows) - len(shown_rows)
+    if hidden_from_list:
+        notes.append(f"{hidden_from_list} 条已被整段重跑替代的失败版本仍计入上方统计，不再列入版本记录。")
+    resolved_parents = visible_parent_ids(session, [row["parent_run_id"] for row in shown_rows])
+    for row in shown_rows:
+        if row["parent_run_id"]:
+            row["parent_run_id"] = resolved_parents.get(row["parent_run_id"], row["parent_run_id"])
+    rows = shown_rows
     return {
         "generated_at": now, "filters": {"source": source, "days": days, "project_id": project_id},
         "counts": counts,

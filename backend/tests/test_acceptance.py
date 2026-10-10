@@ -64,7 +64,7 @@ def test_accept_rejects_partial_fail(client):
 
 def test_accept_rejects_missing_required_id(client):
     run_id = drive_to_acceptance(client)
-    items = full_checklist(True)[1:]
+    items = [{"id": "prd_match", "label": "需求与实现大体一致", "passed": True}]
     r = client.post(f"/api/v1/runs/{run_id}/accept", json={"checklist": items})
     assert r.status_code == 400
     body = r.json()

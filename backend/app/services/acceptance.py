@@ -10,28 +10,27 @@ class ChecklistItemDef:
     label: str
 
 
-# 与前端 DEFAULT_ACCEPTANCE_CHECKLIST 保持同 id / 文案
+# 与前端 DEFAULT_ACCEPTANCE_CHECKLIST 保持同 id / 文案。
+# 历史清单里的 prd_match、no_blockers 仍可保存，交付只要求主流程这一项。
 DEFAULT_ACCEPTANCE_CHECKLIST: tuple[ChecklistItemDef, ...] = (
-    ChecklistItemDef("local_run", "主路径能按说明在本地跑起来"),
-    ChecklistItemDef("prd_match", "PRD 与实现大体一致"),
-    ChecklistItemDef("no_blockers", "没有明显阻断性错误"),
+    ChecklistItemDef("local_run", "主流程走通了"),
 )
 
 REQUIRED_IDS = frozenset(item.id for item in DEFAULT_ACCEPTANCE_CHECKLIST)
 
 
 def validate_acceptance_checklist(items: list) -> None:
-    """校验请求清单：必须覆盖全部必选项且全部 passed。
+    """交付只要求主流程通过。历史清单里的其他项不阻断。
 
     items: 具有 .id / .passed 属性的对象列表（Pydantic model 即可）。
     失败时抛出 ValueError，message 为对人可读原因；调用方映射为 AppError。
     """
     if not items:
-        raise ValueError("请勾选验收清单全部项后再交付")
+        raise ValueError("请确认主流程走通后再交付")
     by_id = {getattr(i, "id", None): i for i in items}
     missing = REQUIRED_IDS - set(by_id)
     if missing:
-        raise ValueError("验收清单不完整，请勾选全部必选项")
+        raise ValueError("请确认主流程走通后再交付")
     failed = [by_id[i] for i in REQUIRED_IDS if not getattr(by_id[i], "passed", False)]
     if failed:
-        raise ValueError("验收清单尚有未通过项")
+        raise ValueError("主流程未通过，不能交付")

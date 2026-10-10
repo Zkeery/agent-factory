@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.errors import AppError
 from app.models import Decision, EvidenceItem, FactoryRun, StageEvent
 from app.services.stages import Stage
+from app.services.version_visibility import visible_parent_ids
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
 DELIVERY_STAGES = {Stage.GATE_PASSED.value, Stage.AWAITING_ACCEPTANCE.value, Stage.DELIVERED.value}
@@ -230,7 +231,7 @@ def build_bundle(session: Session, run: FactoryRun) -> DeliveryBundle:
     metadata = {
         "run_id": run.id, "idea": run.idea, "stage": run.current_stage,
         "execution_mode": run.execution_mode or "workflow",
-        "parent_run_id": getattr(run, "parent_run_id", None),
+        "parent_run_id": visible_parent_ids(session, [getattr(run, "parent_run_id", None)]).get(run.parent_run_id) if getattr(run, "parent_run_id", None) else None,
         "change_request": getattr(run, "change_request", None) or "",
         "llm_provider": run.llm_provider, "llm_model": run.llm_model_snapshot,
     }

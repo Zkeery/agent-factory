@@ -51,11 +51,37 @@ def validate_scenarios(items: list[dict]) -> list[dict]:
     return [item.model_dump() for item in validated.scenarios]
 
 
+def main_flow_scenario(scenarios: list[dict]) -> dict | None:
+    """用户只验收主流程。新数据用 main-flow；历史多场景取主流程标题，否则取第一条。"""
+    usable = [item for item in scenarios if isinstance(item, dict) and item.get("id")]
+    for item in usable:
+        if item.get("id") == "main-flow":
+            return item
+    for item in usable:
+        title = str(item.get("title") or "")
+        if any(word in title for word in ("主流程", "主链路", "主路径")):
+            return item
+    return usable[0] if usable else None
+
+
 def validate_scenario_results(scenarios: list[dict], results: list) -> None:
     validate_scenarios(scenarios)
-    expected = {item["id"] for item in scenarios}
-    actual = [item.scenario_id for item in results]
-    if len(actual) != len(set(actual)) or set(actual) != expected:
-        raise ValueError("请逐项填写本版本的全部验收场景，不得缺失、重复或包含旧场景")
-    if any(not item.passed or not item.observation.strip() for item in results):
-        raise ValueError("每条业务场景必须通过，并填写实际观察结果后才能交付")
+    main = main_flow_scenario(scenarios)
+    if main is None:
+        raise ValueError("请先写清主流程怎么操作、怎样算走通")
+    known = {item["id"] for item in scenarios}
+    seen: set[str] = set()
+    by_id = {}
+    for item in results:
+        scenario_id = item.scenario_id
+        if scenario_id in seen:
+            raise ValueError("验收记录重复")
+        seen.add(scenario_id)
+        if scenario_id not in known:
+            raise ValueError("验收记录包含不属于本版本的场景")
+        if not str(item.observation or "").strip():
+            raise ValueError("已提交的验收记录需要填写实际结果")
+        by_id[scenario_id] = item
+    main_result = by_id.get(main["id"])
+    if main_result is None or not main_result.passed:
+        raise ValueError("主流程未通过，请先写下问题并创建修改版")

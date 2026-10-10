@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Project, RunSummary } from "./factory";
-import { matchesProject, projectEntries, sortProjectVersions } from "./projectNavigation";
+import { matchesProject, projectEntries, projectVersionNumber, sortProjectVersions } from "./projectNavigation";
 
 const project = (id: string, name = "五子棋"): Project => ({ id, name, idea_summary: "", workspace_path: "", created_at: "2026-10-01", updated_at: "2026-10-01", run_count: 0 });
 const run = (id: string, project_id: string | null, day: number, idea = "五子棋"): RunSummary => ({ id, project_id, idea, created_at: `2026-10-0${day}T10:00:00`, current_stage: "awaiting_acceptance", status: "running" });
@@ -33,5 +33,17 @@ describe("项目导航与版本归属", () => {
     const versions = [run("v3", "one", 3), run("v1", "one", 1), { ...run("v2", "one", 2), parent_run_id: "v1" }];
     expect(sortProjectVersions(versions).map((item) => item.id)).toEqual(["v1", "v2", "v3"]);
     expect(versions.map((item) => item.id)).toEqual(["v3", "v1", "v2"]);
+  });
+  it("可见版本按创建顺序连号，已保存的间隔号不再展示", () => {
+    const versions = [
+      { ...run("v2", "one", 2), version_no: 2 },
+      { ...run("v4", "one", 4), version_no: 4 },
+      { ...run("v6", "one", 6), version_no: 6 },
+      { ...run("v7", "one", 7), version_no: 7 },
+    ];
+    expect(versions.map((item) => projectVersionNumber(item, versions))).toEqual([1, 2, 3, 4]);
+    const alone = run("legacy", null, 1);
+    expect(projectVersionNumber(alone, [alone])).toBe(1);
+    expect(projectVersionNumber({ id: "missing", created_at: "2026-10-01T10:00:00" }, versions)).toBe(1);
   });
 });

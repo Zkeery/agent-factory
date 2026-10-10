@@ -35,7 +35,7 @@ class AcceptanceScenario(BaseModel):
 
 
 class AcceptanceScenariosRequest(BaseModel):
-    scenarios: list[AcceptanceScenario] = Field(min_length=3, max_length=10)
+    scenarios: list[AcceptanceScenario] = Field(min_length=1, max_length=10)
 
     @model_validator(mode="after")
     def unique_ids(self):
@@ -169,6 +169,7 @@ class RunSummary(BaseModel):
     auto_schedule_id: str | None = None
     parent_run_id: str | None = None
     execution_mode: Literal["workflow", "agent_team"] = "workflow"
+    version_no: int = 0
 
 
 class RunListOut(BaseModel):
@@ -204,6 +205,8 @@ class RunOut(BaseModel):
     llm_model: str = ""
     execution_mode: Literal["workflow", "agent_team"] = "workflow"
     parent_run_id: str | None = None
+    version_no: int = 0
+    superseded_by_run_id: str | None = None
     change_request: str = ""
     requirement_feedback: list[RequirementFeedbackOut] = Field(default_factory=list)
     prd_revision: int = 0

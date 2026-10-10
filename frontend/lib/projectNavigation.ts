@@ -11,6 +11,13 @@ export function sortProjectVersions(runs: RunSummary[]): RunSummary[] {
   return [...runs].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
 }
 
+/** 可见版本按创建时间、再按标识连续编号，从 1 开始。列表里不应再包含被替代的失败版本。 */
+export function projectVersionNumber(version: { id: string; created_at?: string }, versions: { id: string; created_at: string }[]): number {
+  const ordered = [...versions].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  const index = ordered.findIndex((item) => item.id === version.id);
+  return index >= 0 ? index + 1 : 1;
+}
+
 /** Group by identity, never by title: two projects can legitimately share a name. */
 export function projectEntries(projects: Project[], runs: RunSummary[]): ProjectEntry[] {
   const entries = new Map<string, ProjectEntry>(projects.map((project) => [

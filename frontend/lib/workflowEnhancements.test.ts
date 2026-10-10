@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acceptanceResultError,
   acceptanceScenarioError,
+  mainFlowScenario,
+  preservedScenarioResults,
+  resolveVisibleRun,
   acceptRun,
   canReviseRun,
   confirmPrd,
@@ -43,20 +46,41 @@ describe("按具体任务验收", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ confirmed: true, prd_revision: 3 });
   });
 
-  it("未定义完整的至少三个场景时不能确认", () => {
+  it("主流程写清后即可确认，空场景和重复编号不行", () => {
+    expect(acceptanceScenarioError([scenarios[0]])).toBeNull();
     expect(acceptanceScenarioError(scenarios)).toBeNull();
-    expect(acceptanceScenarioError(scenarios.slice(0, 2))).not.toBeNull();
+    expect(acceptanceScenarioError([])).not.toBeNull();
     expect(acceptanceScenarioError(scenarios.map((item, i) => i === 1 ? { ...item, expected_output: " " } : item))).not.toBeNull();
-    expect(acceptanceScenarioError([scenarios[0], scenarios[0], scenarios[2]])).not.toBeNull();
+    expect(acceptanceScenarioError([scenarios[0], scenarios[0]])).not.toBeNull();
+    expect(mainFlowScenario([{ id: "main-flow", title: "其他", input: "操作", expected_output: "走通" }, scenarios[0]])?.id).toBe("main-flow");
+    expect(mainFlowScenario([{ id: "path", title: "主链路检查", input: "操作", expected_output: "走通" }, scenarios[0]])?.id).toBe("path");
+    expect(mainFlowScenario(scenarios)?.id).toBe("normal");
   });
 
-  it("必须覆盖全部场景、实际观察非空且通过，草稿不能冒充交付", () => {
+  it("只要求主流程通过并留下观察，其余历史场景不阻断交付", () => {
     const complete = scenarios.map((item) => ({ scenario_id: item.id, passed: true, observation: "实际输入并检查，结果符合预期。" }));
     expect(acceptanceResultError(scenarios, complete)).toBeNull();
-    expect(acceptanceResultError(scenarios, complete.slice(0, 2))).not.toBeNull();
-    expect(acceptanceResultError(scenarios, [complete[0], complete[0], complete[2]])).not.toBeNull();
+    expect(acceptanceResultError(scenarios, [complete[0]])).toBeNull();
+    expect(acceptanceResultError(scenarios, complete.slice(1))).not.toBeNull();
+    expect(acceptanceResultError(scenarios, [complete[0], complete[0]])).not.toBeNull();
     expect(acceptanceResultError(scenarios, complete.map((item, i) => i === 0 ? { ...item, passed: false } : item))).not.toBeNull();
-    expect(acceptanceResultError(scenarios, complete.map((item, i) => i === 0 ? { ...item, observation: " " } : item))).not.toBeNull();
+    expect(acceptanceResultError(scenarios, [{ ...complete[0], observation: " " }])).not.toBeNull();
+    expect(acceptanceResultError(scenarios, complete.map((item, i) => i === 1 ? { ...item, passed: false } : item))).toBeNull();
+    expect(preservedScenarioResults(scenarios, complete, "normal").map((item) => item.scenario_id)).toEqual(["missing", "empty"]);
+  });
+
+  it("打开已被替代的失败版本时跟到新版本，循环引用时停住", async () => {
+    const chain: Record<string, { id: string; superseded_by_run_id: string | null }> = {
+      old: { id: "old", superseded_by_run_id: "mid" },
+      mid: { id: "mid", superseded_by_run_id: "next" },
+      next: { id: "next", superseded_by_run_id: null },
+    };
+    await expect(resolveVisibleRun("old", async (id) => chain[id] as never)).resolves.toMatchObject({ id: "next" });
+    const loop: Record<string, { id: string; superseded_by_run_id: string }> = {
+      a: { id: "a", superseded_by_run_id: "b" },
+      b: { id: "b", superseded_by_run_id: "a" },
+    };
+    await expect(resolveVisibleRun("a", async (id) => loop[id] as never)).resolves.toMatchObject({ id: "b" });
   });
 
   it("失败的真实观察可以保存，但验收提交仍带逐项结果", async () => {
