@@ -25,7 +25,7 @@ def app_files(monkeypatch, tmp_path):
     # 仅替换会创建子进程的两个边界。语法、JS、媒体和 AST 护栏仍运行真实实现。
     monkeypatch.setattr(testing, "run_smoke_import", lambda path: (True, "import替身"))
     probes = []
-    def probe(run_id, require_video=False):
+    def probe(run_id, require_video=False, smoke_body=None):
         probes.append(require_video)
         return True, "probe替身"
     monkeypatch.setattr(testing, "probe_runnable", probe)

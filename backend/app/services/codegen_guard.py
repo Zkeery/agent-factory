@@ -29,43 +29,68 @@ def _script_chunks(html_like: str) -> list[str]:
     return chunks
 
 
-def _js_string_has_raw_newline(script: str) -> bool:
-    """启发式：JS 单/双引号字符串内部出现未转义的真实换行。"""
-    i = 0
-    n = len(script)
-    while i < n:
-        ch = script[i]
-        if ch in ("'", '"'):
-            quote = ch
-            i += 1
-            while i < n:
-                c = script[i]
-                if c == "\\":
-                    i += 2
-                    continue
-                if c == quote:
-                    i += 1
-                    break
-                if c == "\n":
-                    return True
-                i += 1
-            continue
-        i += 1
-    return False
+def _scan_js(script: str, *, raw: bool) -> tuple[str, bool, bool]:
+    """扫描脚本，跳过 //、/* */ 和模板字符串。
 
-
-def _escape_js_string_newlines(script: str, *, raw: bool) -> str:
-    """JS 引号字符串里的真换行改成源码转义。raw 字符串保留 \\n；普通字符串写成 \\\\n，运行后仍是 \\n。"""
+    返回 (改写文本, 引号字符串内是否有真换行, 是否不确定)。
+    注释里的撇号不当成字符串。引号没闭合、块注释或模板没结束时视为不确定，调用方不得改写。
+    """
     escape = "\\n" if raw else "\\\\n"
     out: list[str] = []
     i = 0
     n = len(script)
+    found = False
+    uncertain = False
     while i < n:
         ch = script[i]
+        nxt = script[i + 1] if i + 1 < n else ""
+        if ch == "/" and nxt == "/":
+            while i < n and script[i] != "\n":
+                out.append(script[i])
+                i += 1
+            continue
+        if ch == "/" and nxt == "*":
+            out.append(ch)
+            out.append(nxt)
+            i += 2
+            closed = False
+            while i < n:
+                if script[i] == "*" and i + 1 < n and script[i + 1] == "/":
+                    out.append("*")
+                    out.append("/")
+                    i += 2
+                    closed = True
+                    break
+                out.append(script[i])
+                i += 1
+            if not closed:
+                uncertain = True
+            continue
+        if ch == "`":
+            out.append(ch)
+            i += 1
+            closed = False
+            while i < n:
+                c = script[i]
+                if c == "\\":
+                    out.append(c)
+                    if i + 1 < n:
+                        out.append(script[i + 1])
+                    i += 2
+                    continue
+                out.append(c)
+                i += 1
+                if c == "`":
+                    closed = True
+                    break
+            if not closed:
+                uncertain = True
+            continue
         if ch in ("'", '"'):
             quote = ch
             out.append(ch)
             i += 1
+            closed = False
             while i < n:
                 c = script[i]
                 if c == "\\":
@@ -77,23 +102,41 @@ def _escape_js_string_newlines(script: str, *, raw: bool) -> str:
                 if c == quote:
                     out.append(c)
                     i += 1
+                    closed = True
                     break
-                if c == "\r":
-                    i += 1
-                    if i < n and script[i] == "\n":
+                if c in ("\r", "\n"):
+                    found = True
+                    if c == "\r" and i + 1 < n and script[i + 1] == "\n":
+                        i += 2
+                    else:
                         i += 1
                     out.append(escape)
                     continue
-                if c == "\n":
-                    out.append(escape)
-                    i += 1
-                    continue
                 out.append(c)
                 i += 1
+            if not closed:
+                uncertain = True
             continue
         out.append(ch)
         i += 1
-    return "".join(out)
+    return "".join(out), found, uncertain
+
+
+def _js_string_has_raw_newline(script: str) -> bool:
+    """引号字符串内部出现未转义的真实换行。注释和模板字符串不计入。"""
+    _, found, _uncertain = _scan_js(script, raw=False)
+    return found
+
+
+def _escape_js_string_newlines(script: str, *, raw: bool) -> str:
+    """把已确定的 JS 引号字符串里的真换行改成源码转义。不确定时原样返回。
+
+    raw 字符串保留 \\n；普通字符串写成 \\\\n，运行后仍是 \\n。
+    """
+    rewritten, found, uncertain = _scan_js(script, raw=raw)
+    if uncertain or not found:
+        return script
+    return rewritten
 
 
 def repair_embedded_js_newlines(source: str) -> str:

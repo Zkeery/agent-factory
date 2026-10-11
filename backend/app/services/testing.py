@@ -10,7 +10,7 @@ from app.services.codegen_guard import (
     check_video_produces_video,
     looks_like_video_idea,
 )
-from app.services.runner import probe_runnable
+from app.services.runner import main_smoke_body, probe_runnable
 from app.services.sandbox import SandboxViolation, check_source, run_smoke_import
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
@@ -32,7 +32,14 @@ def has_app_code(run_id: str) -> bool:
         return False
 
 
-def run_tests(run_id: str, idea: str = "", *, output_type: str | None = None) -> tuple[bool, str]:
+def run_tests(
+    run_id: str,
+    idea: str = "",
+    *,
+    output_type: str | None = None,
+    prd: dict | None = None,
+    scenarios: list | None = None,
+) -> tuple[bool, str]:
     """以确认后的输出类型统一静态/运行检查；历史 PRD 才从 idea/source 推断。"""
     d = _code_dir(run_id)
     app = d / "app.py"
@@ -74,4 +81,8 @@ def run_tests(run_id: str, idea: str = "", *, output_type: str | None = None) ->
         return False, msg
 
     require_video = output_type == "video" if typed else looks_like_video_idea(idea)
-    return probe_runnable(run_id, require_video=require_video)
+    return probe_runnable(
+        run_id,
+        require_video=require_video,
+        smoke_body=main_smoke_body(idea=idea, prd=prd, scenarios=scenarios),
+    )

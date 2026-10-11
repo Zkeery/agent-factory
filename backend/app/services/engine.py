@@ -99,9 +99,14 @@ def _run_tests(session: Session, run: FactoryRun) -> bool:
     """对生成的代码骨架做真实语法检查 + smoke 运行，不依赖模型。"""
     prd = _load_prd(session, run)
     output_type = prd.get("output_type")
-    # 新 PRD 以确认后的结构化产物类型约束烟测；历史 PRD 保持原行为。
-    test_idea = ("生成可播放视频" if output_type == "video" else "本地小应用") if output_type else run.idea
-    ok, reason = testing.run_tests(run.id, idea=test_idea, output_type=output_type)
+    # 有 output_type 时按它决定是否要求视频；没有时仍按想法文本判断。烟测请求体另见主流程场景。
+    ok, reason = testing.run_tests(
+        run.id,
+        idea=run.idea,
+        output_type=output_type,
+        prd=prd,
+        scenarios=iteration.json_list(run.acceptance_scenarios),
+    )
     _emit(session, run, Stage.TESTING, event_type="test_result", payload=("passed" if ok else f"failed: {reason}"))
     if not ok:
         run.failure_reason = f"代码测试未通过：{reason}"

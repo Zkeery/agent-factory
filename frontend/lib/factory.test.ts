@@ -52,6 +52,9 @@ describe("失败人话 pmFailureText", () => {
     const checked = pmFailureText("agent_execution_failed", "自动检查未通过，且已达到3轮修复上限。下一步：按报错收窄需求或创建修改版本。最近一次检查报错：语法错误");
     expect(checked.message).toContain("自动检查");
     expect(checked.suggestion).toContain("报错");
+    const repeated = pmFailureText("agent_execution_failed", "同一失败原因已连续出现3次，提前停止自动修复，不再占用剩余修复轮次。最近一次检查：主路径失败 400。下一步：按这条报错修改主路径。");
+    expect(repeated.message).toContain("重复出现");
+    expect(repeated.suggestion).toContain("主路径");
   });
 });
 

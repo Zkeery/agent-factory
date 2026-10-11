@@ -543,6 +543,12 @@ export function pmFailureText(code?: string | null, reason?: string | null): { m
   if (code === "agent_execution_failed" && text.includes("模型输出被截断")) {
     return { message: "模型输出被截断", suggestion: "需求一次写得太大。缩小范围，或先做能跑起来的主路径后再重试" };
   }
+  if (code === "agent_execution_failed" && text.includes("同一失败原因已连续出现")) {
+    return {
+      message: "同一个检查错误重复出现，自动修复已停止",
+      suggestion: "看停止原因里的报错。按它改主路径，或收窄需求后创建修改版本",
+    };
+  }
   if (code === "agent_execution_failed" && (text.includes("自动检查未通过") || text.includes("检查报错"))) {
     return {
       message: "代码没通过自动检查，修复次数也用完了",

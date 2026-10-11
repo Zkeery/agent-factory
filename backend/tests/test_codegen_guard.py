@@ -51,6 +51,57 @@ def test_repair_embedded_js_newline_before_the_guard():
     assert repair_embedded_js_newlines(fixed) == fixed
 
 
+def _page(script: str) -> str:
+    nl = chr(10)
+    return (
+        "PAGE = " + chr(34) * 3 + nl
+        + "<html><body><script>" + nl
+        + script
+        + "</script></body></html>" + nl
+        + chr(34) * 3 + nl
+    )
+
+
+def test_repair_leaves_comment_apostrophe_unchanged():
+    """注释里的英文撇号不是字符串，不能把后面的换行改掉。"""
+    nl = chr(10)
+    source = _page("// don't touch this line" + nl + 'var msg = "hello";' + nl)
+    assert repair_embedded_js_newlines(source) == source
+    ok, msg = check_embedded_js_safety(source)
+    assert ok is True, msg
+
+
+def test_repair_keeps_comment_and_fixes_real_string_newline():
+    nl = chr(10)
+    source = _page("// don't touch this line" + nl + 'var msg = "hello' + nl + 'world";' + nl)
+    assert check_embedded_js_safety(source)[0] is False
+    fixed = repair_embedded_js_newlines(source)
+    ok, msg = check_embedded_js_safety(fixed)
+    assert ok is True, msg
+    assert "// don't touch this line" + nl in fixed
+    namespace: dict = {}
+    exec(fixed + nl + "VALUE = PAGE" + nl, namespace)
+    assert 'var msg = "hello\\nworld";' in namespace["VALUE"]
+    assert "// don't touch this line\n" in namespace["VALUE"]
+
+
+def test_repair_skips_block_comment_apostrophe():
+    nl = chr(10)
+    source = _page("/* don't\n   rewrite */" + nl + 'var msg = "ok";' + nl)
+    assert repair_embedded_js_newlines(source) == source
+    assert check_embedded_js_safety(source)[0] is True
+
+
+def test_uncertain_quote_is_not_rewritten_and_guard_still_rejects():
+    """无法确定撇号是否开了字符串时不改源码，仍交给原来的护栏拦截。"""
+    nl = chr(10)
+    source = _page("var re = /don't" + nl + "/;" + nl)
+    assert repair_embedded_js_newlines(source) == source
+    ok, msg = check_embedded_js_safety(source)
+    assert ok is False
+    assert "换行" in msg or "嵌入" in msg
+
+
 def test_codegen_guard_accepts_raw_or_safe():
     """raw 三引号，或普通三引号内 JS 字面 \\n（源码两字符）应通过。"""
     nl = chr(10)
