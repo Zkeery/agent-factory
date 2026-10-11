@@ -225,3 +225,69 @@ def test_stop_app_reaps_preview_process_group(monkeypatch, tmp_path: Path):
     assert "preview-run" not in runner._RUNNING
     assert runner._read_state("preview-run") is None
     assert runner._pid_alive(pid) is False
+
+
+def _hide_procfs(monkeypatch) -> None:
+    monkeypatch.setattr(runner, "_procfs_usable", lambda: False)
+
+
+def test_pid_cwd_and_group_without_procfs(monkeypatch):
+    _hide_procfs(monkeypatch)
+    assert runner._pid_alive(os.getpid()) is True
+    assert runner._pid_alive(0) is False
+    assert runner._pid_alive(99999999) is False
+    cwd = runner._proc_cwd(os.getpid())
+    assert cwd is not None and cwd.is_dir()
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        assert runner._pid_alive(proc.pid) is True
+        assert runner._group_has_running_member(proc.pid) is True
+        assert runner._proc_cwd(proc.pid) is not None
+    finally:
+        if proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                proc.kill()
+            proc.wait(timeout=2)
+    assert runner._pid_alive(proc.pid) is False
+    assert runner._group_has_running_member(proc.pid) is False
+
+
+def test_unknown_listen_owner_does_not_reject_live_process(monkeypatch):
+    _hide_procfs(monkeypatch)
+    monkeypatch.setattr(runner, "_process_owns_listen", lambda pid, port: None)
+    assert runner._wait_owns_listen(os.getpid(), 9, timeout=0.2) is True
+
+
+def test_foreign_listen_owner_is_still_rejected(monkeypatch):
+    monkeypatch.setattr(runner, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(runner, "_process_owns_listen", lambda pid, port: False)
+    assert runner._wait_owns_listen(os.getpid(), 9, timeout=0.25) is False
+
+
+def test_probe_and_preview_without_procfs(monkeypatch, tmp_path: Path):
+    root = tmp_path / "data"
+    (root / "code").mkdir(parents=True)
+    _hide_procfs(monkeypatch)
+    monkeypatch.setattr(runner, "DATA_ROOT", root)
+    monkeypatch.setattr(runner, "PREVIEW_DIR", root / "preview")
+    _write(root / "code", "portable", MARKED_APP.replace("MARKER", "portable"))
+    ok, message = runner.probe_runnable("portable", smoke_body={"input": "主路径"})
+    assert ok, message
+    started = runner.start_app("portable")
+    proc = runner._RUNNING["portable"]["proc"]
+    try:
+        assert runner._process_owns_listen(proc.pid, started["port"]) is True
+        assert runner._proc_cwd(proc.pid) is not None
+        assert runner.stop_app("portable") is True
+    finally:
+        if runner._pid_alive(proc.pid):
+            runner._kill_group(proc.pid)
+    assert runner._pid_alive(proc.pid) is False
+    assert runner._read_state("portable") is None

@@ -14,6 +14,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import psutil
+
 from app.core.config import settings
 from app.core.errors import AppError
 
@@ -31,6 +33,11 @@ def _state_path(run_id: str) -> Path:
     return PREVIEW_DIR / f"{safe}.json"
 
 
+def _procfs_usable() -> bool:
+    """Linux 进程文件可用。macOS 没有 /proc，调用方改走 psutil 与 lsof。"""
+    return Path("/proc/self/stat").is_file() and Path("/proc/net/tcp").is_file()
+
+
 def _proc_state(pid: int) -> str | None:
     """进程状态。Z/X 表示已退出但尚未被父进程回收，不能再当成正在提供服务。"""
     try:
@@ -43,23 +50,73 @@ def _proc_state(pid: int) -> str | None:
     return stat[marker + 2]
 
 
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    state = _proc_state(pid)
-    if state is None or state in {"Z", "X"}:
-        return False
+def _signal_reaches(pid: int) -> bool | None:
+    """0 号信号探测。True 表示进程还在，False 表示不存在，None 表示没有权限判断。"""
     try:
         os.kill(pid, 0)
         return True
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return None
+    except OSError:
         return False
 
 
-def _group_has_running_member(pgid: int) -> bool:
-    """进程组里是否还有未退出的成员。组长已成僵尸时，killpg(0) 仍会成功，不能用来判断。"""
-    if pgid <= 0:
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
         return False
+    if _procfs_usable():
+        state = _proc_state(pid)
+        if state is None or state in {"Z", "X"}:
+            return False
+        reached = _signal_reaches(pid)
+        return reached is True
+    return _pid_alive_portable(pid)
+
+
+def _pid_alive_portable(pid: int) -> bool:
+    try:
+        status = psutil.Process(pid).status()
+    except psutil.NoSuchProcess:
+        return False
+    except (psutil.AccessDenied, OSError):
+        reached = _signal_reaches(pid)
+        return reached is not False
+    if status in {psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD}:
+        return False
+    return True
+
+
+def _state_is_dead(state: str) -> bool:
+    token = (state or "").lstrip()[:1].upper()
+    return token in {"Z", "X"}
+
+
+def _ps_group_members(pgid: int) -> list[tuple[int, str]] | None:
+    """用 ps 列出进程组。命令不可用时返回 None，空列表表示组里没有可见进程。"""
+    commands = (
+        ["ps", "-axo", "pid=,pgid=,state="],
+        ["ps", "-eo", "pid=,pgid=,stat="],
+    )
+    for command in commands:
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode != 0:
+            continue
+        members: list[tuple[int, str]] = []
+        for line in completed.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 3 or not parts[0].isdigit() or parts[1] != str(pgid):
+                continue
+            members.append((int(parts[0]), parts[2]))
+        return members
+    return None
+
+
+def _proc_group_has_running_member(pgid: int) -> bool:
     leader = _proc_state(pgid)
     if leader not in {None, "Z", "X"}:
         return True
@@ -79,6 +136,24 @@ def _group_has_running_member(pgid: int) -> bool:
         if len(fields) >= 3 and fields[2] == str(pgid) and fields[0] not in {"Z", "X"}:
             return True
     return False
+
+
+def _group_has_running_member(pgid: int) -> bool:
+    """进程组里是否还有未退出的成员。组长已成僵尸时，killpg(0) 仍会成功，不能用来判断。"""
+    if pgid <= 0:
+        return False
+    if _procfs_usable():
+        return _proc_group_has_running_member(pgid)
+    if _pid_alive(pgid):
+        return True
+    try:
+        os.killpg(pgid, 0)
+    except OSError:
+        return False
+    members = _ps_group_members(pgid)
+    if members is None:
+        return False
+    return any(not _state_is_dead(state) for _pid, state in members)
 
 
 def _port_in_use(port: int) -> bool:
@@ -251,11 +326,36 @@ def _atexit_reap() -> None:
 atexit.register(_atexit_reap)
 
 
-def _proc_cwd(pid: int) -> Path | None:
+def _lsof_cwd(pid: int) -> Path | None:
     try:
-        return Path(os.readlink(f"/proc/{pid}/cwd"))
-    except OSError:
+        completed = subprocess.run(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
+    for line in completed.stdout.splitlines():
+        if line.startswith("n") and len(line) > 1:
+            return Path(line[1:])
+    return None
+
+
+def _proc_cwd(pid: int) -> Path | None:
+    if pid <= 0:
+        return None
+    if _procfs_usable():
+        try:
+            return Path(os.readlink(f"/proc/{pid}/cwd"))
+        except OSError:
+            return None
+    try:
+        text = psutil.Process(pid).cwd()
+    except (psutil.Error, OSError):
+        return _lsof_cwd(pid)
+    return Path(text) if text else None
 
 
 def _under_code_root(path: Path | None) -> bool:
@@ -321,22 +421,103 @@ def _descendant_pids(pid: int) -> list[int]:
     return found
 
 
-def _process_owns_listen(pid: int, port: int) -> bool:
-    """监听该端口的套接字必须属于本次启动的进程或其子进程。"""
+def _process_owns_listen_proc(pid: int, port: int) -> bool | None:
+    if not Path("/proc/net/tcp").is_file():
+        return None
     inodes = _listen_inodes(port)
     if not inodes or pid <= 0:
         return False
     if _process_has_socket(pid, inodes):
         return True
-    return any(_process_has_socket(child, inodes) for child in _descendant_pids(pid))
+    saw_fd = Path(f"/proc/{pid}/fd").is_dir()
+    for child in _descendant_pids(pid):
+        if _process_has_socket(child, inodes):
+            return True
+        if Path(f"/proc/{child}/fd").is_dir():
+            saw_fd = True
+    if not saw_fd:
+        return None
+    return False
+
+
+def _related_pids(pid: int) -> list[int]:
+    found = [pid]
+    try:
+        found.extend(child.pid for child in psutil.Process(pid).children(recursive=True))
+    except (psutil.Error, OSError):
+        pass
+    return found
+
+
+def _psutil_owns(pid: int, port: int) -> bool | None:
+    try:
+        proc = psutil.Process(pid)
+        method = getattr(proc, "net_connections", None) or proc.connections
+        connections = method(kind="inet")
+    except psutil.NoSuchProcess:
+        return False
+    except (psutil.AccessDenied, AttributeError, OSError):
+        return None
+    for item in connections:
+        address = getattr(item, "laddr", None)
+        if getattr(item, "status", "") == psutil.CONN_LISTEN and getattr(address, "port", None) == port:
+            return True
+    return False
+
+
+def _lsof_owns(pid: int, port: int) -> bool | None:
+    if pid <= 0 or port <= 0:
+        return False
+    try:
+        completed = subprocess.run(
+            ["lsof", "-n", "-P", "-a", "-p", str(pid), "-iTCP:" + str(port), "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode == 0:
+        return bool(completed.stdout.strip())
+    if completed.returncode == 1:
+        return False
+    return None
+
+
+def _process_owns_listen_portable(pid: int, port: int) -> bool | None:
+    pids = _related_pids(pid)
+    ps_results = [_psutil_owns(item, port) for item in pids]
+    if True in ps_results:
+        return True
+    # psutil 在 macOS 上可能读不到继承来的套接字，空列表不能直接当成别人的端口。
+    lsof_results = [_lsof_owns(item, port) for item in pids]
+    if True in lsof_results:
+        return True
+    if ps_results and None not in ps_results and False in ps_results:
+        return False
+    if lsof_results and None not in lsof_results and False in lsof_results:
+        return False
+    return None
+
+
+def _process_owns_listen(pid: int, port: int) -> bool | None:
+    """True 表示本次进程或其子进程在监听。False 表示确认不是。None 表示当前平台判断不了。"""
+    if pid <= 0 or port <= 0:
+        return False
+    if _procfs_usable():
+        return _process_owns_listen_proc(pid, port)
+    return _process_owns_listen_portable(pid, port)
 
 
 def _wait_owns_listen(pid: int, port: int, timeout: float = 2.0) -> bool:
+    """确认监听归属。判断不了且进程仍在时返回 True：套接字已用 --fd 交给该子进程。"""
     deadline = time.monotonic() + timeout
     while True:
         if not _pid_alive(pid):
             return False
-        if _process_owns_listen(pid, port):
+        owns = _process_owns_listen(pid, port)
+        if owns is True or owns is None:
             return True
         if time.monotonic() >= deadline:
             return False
@@ -567,9 +748,11 @@ def _launch(code_dir: Path) -> tuple[subprocess.Popen, int]:
 def _confirm_ours(proc: subprocess.Popen, port: int) -> str | None:
     if proc.poll() is not None:
         return f"检查进程已退出（code={proc.returncode}），不能把同一端口上的其他服务当成本次结果"
-    if not _wait_owns_listen(proc.pid, port):
-        return "端口上的服务不是本次启动的检查进程，结果作废"
-    return None
+    if _wait_owns_listen(proc.pid, port):
+        return None
+    if proc.poll() is not None:
+        return f"检查进程已退出（code={proc.returncode}），不能把同一端口上的其他服务当成本次结果"
+    return "端口上的服务不是本次启动的检查进程，结果作废"
 
 
 def probe_runnable(
@@ -622,13 +805,13 @@ def probe_runnable(
 
 
 def _recorded_preview(run_id: str) -> dict | None:
-    """只读：状态文件里的进程仍在，且确实监听记录中的端口。"""
+    """只读：状态文件里的进程仍在。能判断端口归属时，必须是它在监听。"""
     st = _read_state(run_id)
     if not st:
         return None
     pid = int(st.get("pid") or 0)
     port = int(st.get("port") or 0)
-    if _pid_alive(pid) and port > 0 and _process_owns_listen(pid, port):
+    if _pid_alive(pid) and port > 0 and _process_owns_listen(pid, port) is not False:
         return {"running": True, "url": prefer_open_url(f"http://127.0.0.1:{port}"), "port": port}
     return None
 
@@ -639,7 +822,8 @@ def _drop_stale_preview(run_id: str) -> None:
         return
     pid = int(st.get("pid") or 0)
     port = int(st.get("port") or 0)
-    if _pid_alive(pid) and _under_code_root(_proc_cwd(pid)) and not _process_owns_listen(pid, port):
+    owns = _process_owns_listen(pid, port) if port > 0 else False
+    if _pid_alive(pid) and _under_code_root(_proc_cwd(pid)) and owns is False:
         _kill_group(int(st.get("pgid") or pid))
     _remove_state(run_id)
 
@@ -654,7 +838,7 @@ def start_app(run_id: str) -> dict:
     if run_id in _RUNNING:
         port = _RUNNING[run_id]["port"]
         proc = _RUNNING[run_id]["proc"]
-        if proc.poll() is None and _process_owns_listen(proc.pid, port):
+        if proc.poll() is None and _process_owns_listen(proc.pid, port) is not False:
             return {"running": True, "url": prefer_open_url(f"http://127.0.0.1:{port}"), "port": port}
         _terminate(proc)
         _RUNNING.pop(run_id, None)
@@ -696,7 +880,8 @@ def stop_app(run_id: str) -> bool:
     if st and _pid_alive(int(st.get("pid", 0))):
         pid = int(st["pid"])
         port = int(st.get("port") or 0)
-        if _under_code_root(_proc_cwd(pid)) or _process_owns_listen(pid, port):
+        owns = _process_owns_listen(pid, port) if port > 0 else False
+        if _under_code_root(_proc_cwd(pid)) or owns is not False:
             _kill_group(int(st.get("pgid") or pid))
         _remove_state(run_id)
         return True
@@ -708,7 +893,7 @@ def app_status(run_id: str) -> dict:
     if run_id in _RUNNING:
         port = _RUNNING[run_id]["port"]
         proc = _RUNNING[run_id]["proc"]
-        if proc.poll() is None and _process_owns_listen(proc.pid, port):
+        if proc.poll() is None and _process_owns_listen(proc.pid, port) is not False:
             return {"running": True, "url": prefer_open_url(f"http://127.0.0.1:{port}"), "port": port}
     recorded = _recorded_preview(run_id)
     if recorded:
