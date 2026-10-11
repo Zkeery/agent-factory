@@ -44,6 +44,8 @@ describe("失败人话 pmFailureText", () => {
     const historical = pmFailureText("agent_execution_failed", "开发与修复已达到每轮六次模型调用上限");
     expect(historical.message).toBe("本轮协作达到调用上限");
     expect(historical.suggestion).toContain("自动检查");
+    expect(pmFailureText("prd_content_incomplete", "PRD 仍不完整：main_loop 缺少「页面与字段」正文").message).toContain("页面与字段");
+    expect(pmFailureText("llm_output_invalid", "模型输出无法解析为 PRD：JSON 无法解析（Expecting value，位置 3）").message).toContain("JSON 无法解析");
     const empty = pmFailureText("agent_execution_failed", "开发与修复已达到每轮8次模型调用上限。磁盘上还没有可检查的源码，因此没有进入自动检查。下一步：把需求收成单个页面能完成的主路径后整段重跑。");
     expect(empty.message).toBe("这轮还没写出可运行的代码");
     expect(empty.suggestion).toContain("主路径");
@@ -98,7 +100,8 @@ describe("阶段映射", () => {
     expect(acceptanceStatusText(failed)).toBe("验收未通过");
     expect(userStageLabel(failed, "pm")).toBe("验收未通过");
     expect(userStageLabel(failed, "dev")).toBe("验收未通过");
-    expect(userStageLabel({ ...failed, revision_created: true })).toBe("验收未通过 · 已生成修改版");
+    expect(userStageLabel({ ...failed, revision_created: true })).toBe("验收未通过 · 已由修改版替代");
+    expect(userStageLabel({ ...failed, revision_created: true, replacing_version_no: 3 })).toBe("验收未通过 · 已由第 3 版替代");
     expect(acceptanceStatusText({
       current_stage: "awaiting_acceptance",
       acceptance_outcome: "pending",

@@ -143,9 +143,13 @@ def list_project_runs(project_id: str, session: Session = Depends(get_session), 
     )
     shown = presentation(session, runs)
     revised = iteration.parents_with_revisions(session, [r.id for r in runs])
+    replacements = iteration.replacement_version_numbers(session, [r for r in runs if r.id in revised])
     return RunListOut(
         runs=[
-            _run_summary(r, shown[r.id][0], shown[r.id][1], revision_created=r.id in revised)
+            _run_summary(
+                r, shown[r.id][0], shown[r.id][1],
+                revision_created=r.id in revised, replacing_version_no=replacements.get(r.id),
+            )
             for r in runs
         ]
     )

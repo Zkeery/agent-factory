@@ -61,7 +61,7 @@ def test_terminal_denominator_includes_cancel_but_not_pending(session):
     for index, stage in enumerate(stages):
         _run(session, f"r{index}", stage=stage)
     value = _review(session)
-    assert value["counts"] == {"total": 6, "delivered": 2, "failed": 2, "cancelled": 1, "pending": 1, "real": 6, "mock": 0, "unknown": 0}
+    assert value["counts"] == {"total": 6, "delivered": 2, "failed": 2, "cancelled": 1, "pending": 1, "replaced": 0, "real": 6, "mock": 0, "unknown": 0}
     metric = value["metrics"]["delivery_rate"]
     assert (metric["value"], metric["numerator"], metric["denominator"], metric["excluded"]) == (0.4, 2, 5, 1)
 
@@ -206,24 +206,30 @@ def test_iteration_does_not_claim_real_improvement_over_mock_baseline(session):
     assert value["metrics"]["iteration_fix_rate"]["value"] is None
 
 
-def test_rejected_acceptance_stays_pending_in_delivery_rate_and_names_the_verdict(session):
+def test_rejected_parent_with_revision_is_closed_and_not_pending(session):
     scenarios = json.dumps([{"id": "scenario-1", "title": "主流程", "input": "记一笔", "expected_output": "看得到"}], ensure_ascii=False)
     parent = _run(
-        session, "parent", stage="awaiting_acceptance", acceptance_scenarios=scenarios,
+        session, "parent", stage="awaiting_acceptance", project_id="ledger",
+        created_at=NOW - timedelta(days=3), acceptance_scenarios=scenarios,
         acceptance_results=json.dumps([{"scenario_id": "scenario-1", "passed": False, "observation": "字体是反的"}], ensure_ascii=False),
     )
-    _run(session, "child", stage="building", parent_run_id=parent.id)
-    untouched = _run(session, "untouched", stage="awaiting_acceptance")
-    _run(session, "revision", stage="idea_submitted", parent_run_id=untouched.id)
+    _run(session, "child", stage="building", parent_run_id=parent.id, project_id="ledger", created_at=NOW - timedelta(days=2))
+    untouched = _run(session, "untouched", stage="awaiting_acceptance", project_id="ledger", created_at=NOW - timedelta(days=1, hours=2))
+    _run(session, "revision", stage="idea_submitted", parent_run_id=untouched.id, project_id="ledger", created_at=NOW - timedelta(days=1))
     value = _review(session)
+    assert value["counts"]["total"] == 4
     assert value["counts"]["delivered"] == 0 and value["counts"]["failed"] == 0 and value["counts"]["cancelled"] == 0
-    assert value["counts"]["pending"] == 4
+    assert value["counts"]["pending"] == 3 and value["counts"]["replaced"] == 1
     assert value["metrics"]["delivery_rate"]["denominator"] == 0
+    assert value["metrics"]["delivery_rate"]["excluded"] == 4
     rows = {row["run_id"]: row for row in value["rows"]}
     assert rows["parent"]["stage"] == "awaiting_acceptance"
     assert rows["parent"]["acceptance_outcome"] == "rejected" and rows["parent"]["revision_created"] is True
+    assert rows["parent"]["replacing_version_no"] == 2
     assert rows["untouched"]["acceptance_outcome"] == "pending" and rows["untouched"]["revision_created"] is True
+    assert rows["untouched"]["replacing_version_no"] is None
     assert rows["child"]["acceptance_outcome"] is None and rows["child"]["revision_created"] is False
+    assert any("不再计入待完成" in note for note in value["notes"])
 
 
 def test_iteration_missing_baseline_is_null(session):

@@ -184,6 +184,7 @@ def test_real_prd_continuously_coarse_json_is_bounded_at_three_attempts(monkeypa
     with pytest.raises(AppError) as error:
         client.generate_prd("个人待办事项工具", decisions_for("新增事项并完成指定事项"))
     assert error.value.code == "prd_content_incomplete"
+    assert "缺少" in error.value.message
     assert len(calls) == 3 and all(call["max_tokens"] == 8000 for call in calls)
     assert "修正以下缺口" in calls[1]["prompt"] and "修正以下缺口" in calls[2]["prompt"]
 
@@ -208,6 +209,51 @@ def test_real_prd_parent_context_and_latest_correction_survive_retry(monkeypatch
         assert "B 撤回指定事项的完成状态" in prompt
         assert '"passed": false' in prompt
         assert "不把父成品当作空白项目" in prompt
+def test_acceptance_synonym_covers_constraint_without_the_exact_word(rich_prd):
+    prd = copy.deepcopy(rich_prd)
+    prd["quality"] = prd["quality"].replace("约束", "限制")
+    assert "约束" not in prd["quality"]
+    assert generated_prd_issues(prd) == []
+    assert validate_generated_prd(prd)["quality"] == prd["quality"]
+
+
+def test_missing_acceptance_aspect_is_completed_from_existing_cases(rich_prd):
+    prd = copy.deepcopy(rich_prd)
+    for word in ("约束", "限制", "禁止", "不得", "不允许", "必须拒绝", "隐私", "越权", "校验失败", "不可以"):
+        prd["quality"] = prd["quality"].replace(word, "规则")
+    assert any("缺少「约束」" in item for item in generated_prd_issues(prd))
+    filled = validate_generated_prd(prd)
+    assert "约束：" in filled["quality"]
+    assert "不视为新需求" in filled["quality"]
+    assert generated_prd_issues(filled) == []
+    assert validate_generated_prd(filled)["quality"] == filled["quality"]
+    assert filled["main_loop"] == prd["main_loop"]
+
+
+def test_invalid_json_retry_names_the_parse_gap_and_hides_secrets(monkeypatch, caplog):
+    import logging
+
+    client = object.__new__(llm.RealLLM)
+    calls = []
+
+    def fake_chat(prompt: str, max_tokens: int = 2000):
+        calls.append(prompt)
+        return "不是 JSON\napi_key=sk-SECRETVALUE123456\n{]"
+
+    monkeypatch.setattr(client, "_chat", fake_chat)
+    with caplog.at_level(logging.WARNING, logger="factory.llm"):
+        with pytest.raises(AppError) as error:
+            client.generate_prd("个人待办事项工具", decisions_for("新增事项并完成指定事项"))
+    assert error.value.code == "llm_output_invalid"
+    assert "无法解析" in error.value.message
+    assert "sk-SECRET" not in error.value.message
+    assert "sk-SECRET" not in caplog.text
+    assert "<redacted>" in caplog.text
+    assert len(calls) == 3
+    assert "修正以下缺口" in calls[1] and "JSON" in calls[1]
+    assert "sk-SECRET" not in calls[1]
+
+
 def test_mock_supplement_preserves_business_fields_and_scenarios():
     idea = "个人待办清单，添加事项并标记完成\n\n需求补充与纠错\n1. 名称为空或只有空格时禁止新增，其余功能保留。"
     prd = mock_llm.generate_prd(idea, [])

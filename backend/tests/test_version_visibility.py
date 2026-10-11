@@ -1,4 +1,4 @@
-"""整段重跑后隐藏被替代的失败版本，可见版本连号，复盘仍计入。"""
+"""整段重跑后隐藏被替代的失败版本，可见版本连号，复盘只计可见版本。"""
 from __future__ import annotations
 
 import time
@@ -176,12 +176,13 @@ def test_retry_hides_replaced_failure_and_keeps_lineage(client, stage):
     session = SessionLocal()
     try:
         user_id = session.get(FactoryRun, kept["id"]).user_id
-        assert metrics.summarize(session, user_id)["total_runs"] == 3
+        assert metrics.summarize(session, user_id)["total_runs"] == 2
         review = insights.build_review(session, user_id, source="all")
-        assert review["counts"]["total"] == 3
-        assert review["counts"]["failed"] >= 1
+        assert review["counts"]["total"] == 2
+        assert review["counts"]["failed"] == 0
         assert created["id"] not in {row["run_id"] for row in review["rows"]}
-        assert any("不再列入版本记录" in note for note in review["notes"])
+        assert any("不进入总数、失败数或交付率" in note for note in review["notes"])
+        assert all("仍计入上方统计" not in note for note in review["notes"])
     finally:
         session.close()
 

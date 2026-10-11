@@ -3,19 +3,43 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from app.core.config import settings
 from app.core.errors import AppError
 from app.services import iteration, mock_llm, parsing
-from app.services.prd_quality import PrdCompletenessError, validate_generated_prd
+from app.services.prd_quality import PrdCompletenessError, missing_acceptance_aspects, validate_generated_prd
 
 logger = logging.getLogger("factory.llm")
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 MAX_RETRIES = 2  # 结构校验失败最多重试次数
+_SECRET = re.compile(
+    r"(?i)\b(?:sk-[A-Za-z0-9_\-]{6,}|api[_-]?key\s*[:=]\s*\S+|bearer\s+\S+|token\s*[:=]\s*\S+)"
+)
+
+
+def _safe_text(text: str, limit: int = 240) -> str:
+    """日志和用户可见摘要：去掉密钥样式，并压成一行。"""
+    cleaned = _SECRET.sub("<redacted>", text or "")
+    return " ".join(cleaned.split())[:limit]
+
+
+def _output_error_summary(exc: Exception) -> str:
+    if isinstance(exc, json.JSONDecodeError):
+        return _safe_text(f"JSON 无法解析（{exc.msg}，位置 {exc.pos}）")
+    if isinstance(exc, ValidationError):
+        fields = sorted({str(err.get("loc", ("?",))[-1]) for err in exc.errors()})
+        return "字段类型不符合：" + "、".join(fields)
+    message = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+    if message.startswith("非 JSON 输出："):
+        return _safe_text(message)
+    return _safe_text(f"{type(exc).__name__}：{message}")
 
 
 def _load_prompt(name: str) -> str:
@@ -195,16 +219,39 @@ class RealLLM(LLMClient):
         for attempt in range(MAX_RETRIES + 1):
             repair_hint = ""
             if last_err is not None:
-                detail = str(last_err)[:1600] if isinstance(last_err, PrdCompletenessError) else "JSON 结构或字段类型不符合合同"
+                if isinstance(last_err, PrdCompletenessError):
+                    detail = str(last_err)[:1600]
+                else:
+                    detail = (
+                        "输出无法解析为完整 JSON。"
+                        + _output_error_summary(last_err)
+                        + "。请只输出一个完整 JSON 对象，付费、海报、分享等增强放进「暂不做」，保证括号闭合。"
+                    )
                 repair_hint = "\n\n上一次输出未通过检查，请重新输出完整 JSON，修正以下缺口：" + detail
             raw = self._chat(prompt + repair_hint, max_tokens=8000)
             try:
-                return validate_generated_prd(parsing.parse_prd(raw))
+                draft = parsing.parse_prd(raw)
+                filled = missing_acceptance_aspects(draft.get("quality") or "" if isinstance(draft, dict) else "")
+                parsed = validate_generated_prd(draft)
+                if filled:
+                    logger.info("PRD 验收小项已按已有用例补全：%s", "、".join(filled))
+                return parsed
+            except PrdCompletenessError as exc:
+                last_err = exc
+                logger.warning("PRD 完整性缺口 attempt=%s issues=%s", attempt + 1, _safe_text(str(exc), 800))
             except Exception as exc:
                 last_err = exc
+                logger.warning(
+                    "PRD 解析失败 attempt=%s summary=%s excerpt=%s",
+                    attempt + 1,
+                    _output_error_summary(exc),
+                    _safe_text(raw, 180),
+                )
         if isinstance(last_err, PrdCompletenessError):
-            raise AppError("prd_content_incomplete", "PRD 缺少功能、页面或验收细节，请重试或补充需求", 502)
-        raise AppError("llm_output_invalid", "模型输出格式校验失败，请重试", 502)
+            detail = _safe_text(str(last_err), 500)
+            raise AppError("prd_content_incomplete", f"PRD 仍不完整：{detail}", 502)
+        summary = _output_error_summary(last_err) if last_err else "输出为空"
+        raise AppError("llm_output_invalid", f"模型输出无法解析为 PRD：{summary}", 502)
 
     def generate_code(self, idea: str, prd: dict, source_context: dict | None = None) -> dict[str, str]:
         prompt = _load_prompt("code.md").format(idea=idea, prd=str(prd))

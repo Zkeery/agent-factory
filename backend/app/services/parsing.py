@@ -53,10 +53,19 @@ def strip_code_fence(raw: str) -> str:
 
 
 def parse_json(raw: str):
+    text = strip_fence(raw)
     try:
-        return json.loads(strip_fence(raw))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"非 JSON 输出：{exc}")
+        return json.loads(text)
+    except json.JSONDecodeError as first:
+        for opener, closer in (("{", "}"), ("[", "]")):
+            start = text.find(opener)
+            end = text.rfind(closer)
+            if start >= 0 and end > start:
+                try:
+                    return json.loads(text[start:end + 1])
+                except json.JSONDecodeError:
+                    continue
+        raise ValueError(f"非 JSON 输出：{first.msg}，位置 {first.pos}") from first
 
 
 def parse_clarify(raw: str) -> list[dict]:

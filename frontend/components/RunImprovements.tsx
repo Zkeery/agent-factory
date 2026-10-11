@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import {
   acceptanceScenarioError,
+  acceptanceStatusText,
   DEFAULT_ACCEPTANCE_CHECKLIST,
   downloadRunBundle,
   mainFlowScenario,
@@ -305,7 +306,7 @@ export function MainFlowAcceptance({ run, busy, onAccept, onFeedback }: {
             onChange={(event) => { setNote(event.target.value); setSavedMessage(null); }} />
         </label>
         <p className="text-[11px] leading-relaxed" style={mutedStyle}>{hint}</p>
-        {run.acceptance_outcome === "rejected" && <p className="text-xs leading-relaxed text-danger">验收未通过。{run.revision_created ? "已生成修改版。" : "确认修改要求后才会创建修改版。"}</p>}
+        {run.acceptance_outcome === "rejected" && <p className="text-xs leading-relaxed text-danger">{acceptanceStatusText(run) || "验收未通过"}。{run.revision_created ? "验收记录仍可查看。" : "确认修改要求后才会创建修改版。"}</p>}
         {savedMessage && <SavedMessage>{savedMessage}</SavedMessage>}
         <ErrorMessage message={error} />
       </div>

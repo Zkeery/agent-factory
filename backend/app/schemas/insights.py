@@ -33,6 +33,7 @@ class ReviewCounts(BaseModel):
     failed: int
     cancelled: int
     pending: int
+    replaced: int = 0
     real: int
     mock: int
     unknown: int
@@ -71,6 +72,7 @@ class ReviewRunRow(BaseModel):
     estimated_cost: float | None
     accounting_version: int
     parent_run_id: str | None
+    replacing_version_no: int | None = None
     acceptance_outcome: Literal["pending", "rejected", "accepted"] | None = None
     revision_created: bool = False
 

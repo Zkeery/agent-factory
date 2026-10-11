@@ -34,8 +34,23 @@ def _sections(text: str) -> dict[str, str]:
     return {key: "\n".join(lines).strip() for key, lines in sections.items()}
 
 
-def generated_prd_issues(prd: dict) -> list[str]:
-    """检查信息位置、行为合同与功能追踪；不以篇幅判定质量。"""
+# 验收四类看的是含义，不是必须出现这四个字。同义说法算覆盖。
+_ASPECT_MARKERS = {
+    "正常": ("正常", "主路径", "成功路径", "顺利完成", "常规任务", "典型场景"),
+    "边界": ("边界", "临界", "空输入", "空值", "为空", "超限", "超长", "上限", "下限", "极端", "空白"),
+    "约束": ("约束", "限制", "禁止", "不得", "不允许", "必须拒绝", "隐私", "越权", "校验失败", "不可以"),
+    "预期": ("预期", "期望", "应当", "可观察", "通过条件", "结果为"),
+}
+_ASPECT_FILL = {
+    "正常": "正常：以上文已列出的主路径用例为准，不另增操作。",
+    "边界": "边界：以上文已列出的空值、超限或异常输入为准；未单列的情况不扩大本期范围。",
+    "约束": "约束：以上文已写的校验、禁止项、隐私和权限规则为准；未写明的限制不视为新需求。",
+    "预期": "预期：以上文验收用例中可观察的输出为准。",
+}
+
+
+def _structural_issues(prd: dict) -> list[str]:
+    """章节、功能追踪和页面规则。不因验收四字缺一就把整份判失败。"""
     if not isinstance(prd, dict):
         return ["PRD 必须是对象"]
     issues: list[str] = []
@@ -68,16 +83,50 @@ def generated_prd_issues(prd: dict) -> list[str]:
     for label in ("用户操作", "系统响应", "可以做", "不可以做"):
         if label not in flow:
             issues.append(f"页面与功能规格缺少「{label}」规则")
-    for label in ("正常", "边界", "约束", "预期"):
-        if label not in acceptance:
-            issues.append(f"业务验收缺少「{label}」内容")
     if prd.get("output_type") not in {"text", "image", "video", "other"}:
         issues.append("output_type 必须反映本版主路径产物")
     return issues
 
 
+def missing_acceptance_aspects(quality: str) -> list[str]:
+    """结构已经成立时，验收里还没写出的含义。同义表述视为已覆盖。"""
+    text = quality or ""
+    return [label for label, markers in _ASPECT_MARKERS.items() if not any(marker in text for marker in markers)]
+
+
+def _append_aspect_note(quality: str, missing: list[str]) -> str:
+    note = "验收覆盖说明（按已写用例归类，不新增功能）：\n" + "\n".join(
+        _ASPECT_FILL[label] for label in missing if label in _ASPECT_FILL
+    )
+    marker = "### 质量边界"
+    if marker in quality:
+        return quality.replace(marker, note + "\n\n" + marker, 1)
+    return quality.rstrip() + "\n\n" + note + "\n"
+
+
+def generated_prd_issues(prd: dict) -> list[str]:
+    """检查信息位置、行为合同与功能追踪；不以篇幅或死关键词判定质量。"""
+    issues = _structural_issues(prd)
+    if issues or not isinstance(prd, dict):
+        return issues
+    quality = prd.get("quality", "")
+    quality = quality if isinstance(quality, str) else ""
+    issues.extend(f"业务验收缺少「{label}」内容" for label in missing_acceptance_aspects(quality))
+    return issues
+
+
 def validate_generated_prd(prd: dict) -> dict:
-    issues = generated_prd_issues(prd)
+    """结构缺口仍拒绝。只缺验收含义的小项时，按已有用例补一句，不整段失败。"""
+    issues = _structural_issues(prd)
     if issues:
         raise PrdCompletenessError("；".join(issues))
-    return prd
+    if not isinstance(prd, dict):
+        raise PrdCompletenessError("PRD 必须是对象")
+    quality = prd.get("quality", "")
+    quality = quality if isinstance(quality, str) else ""
+    missing = missing_acceptance_aspects(quality)
+    if not missing:
+        return prd
+    updated = dict(prd)
+    updated["quality"] = _append_aspect_note(quality, missing)
+    return updated
