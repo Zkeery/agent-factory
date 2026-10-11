@@ -10,7 +10,6 @@ import pytest
 from app.models import Decision, EvidenceItem, FactoryRun, SessionLocal, StageEvent
 from app.services import deploy, engine, evidence, iteration, llm, mock_llm
 from app.services.acceptance import DEFAULT_ACCEPTANCE_CHECKLIST
-from app.services.codegen_guard import looks_like_video_idea
 from app.services.stages import Stage
 
 
@@ -19,7 +18,7 @@ def local_pipeline(monkeypatch, tmp_path):
     # 文件与生成进程也隔离，避免新测试污染用户产物或占用预览端口。
     for module in (engine, deploy, evidence):
         monkeypatch.setattr(module, "DATA_ROOT", tmp_path)
-    monkeypatch.setattr(engine.testing, "run_tests", lambda run_id, idea="", output_type=None: (True, "测试替身通过"))
+    monkeypatch.setattr(engine.testing, "run_tests", lambda run_id, idea="", output_type=None, prd=None, scenarios=None: (True, "测试替身通过"))
     monkeypatch.setattr(engine, "start_run_async", engine.advance_run)
     return tmp_path
 
@@ -340,12 +339,16 @@ def test_confirmed_prd_output_type_controls_testing(local_pipeline, client, monk
     response = client.post(f"/api/v1/runs/{run['id']}/requirements", json={"feedback": feedback})
     assert response.status_code == 200, response.text
     seen = []
-    monkeypatch.setattr(engine.testing, "run_tests", lambda run_id, idea="", output_type=None: (seen.append(idea) or True, "测试替身通过"))
+    def record_tests(run_id, idea="", output_type=None, prd=None, scenarios=None):
+        seen.append({"idea": idea, "output_type": output_type})
+        return True, "测试替身通过"
+    monkeypatch.setattr(engine.testing, "run_tests", record_tests)
     with SessionLocal() as session:
         current = session.get(FactoryRun, run["id"])
         assert json.loads(current.prd_snapshot)["output_type"] == expected_type
         assert engine._run_tests(session, current)
-    assert looks_like_video_idea(seen[-1]) is (expected_type == "video")
+    assert seen[-1]["output_type"] == expected_type
+    assert seen[-1]["idea"] == idea
 
 
 def test_real_model_prompts_receive_parent_sources_and_failed_observations(monkeypatch):

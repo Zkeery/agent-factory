@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -21,9 +22,12 @@ from app.core.errors import AppError
 from app.models import FactoryRun, StageEvent
 from app.services import iteration, testing
 from app.services.codegen_guard import repair_embedded_js_newlines
+from app.services.runner import main_smoke_body, smoke_contract_note
 
 MAX_TURNS = 8
 MAX_REPAIRS = 3
+# 同一失败连续出现这么多次就停止，不再把剩余修复轮次耗完。
+REPEAT_FAILURE_LIMIT = 3
 # 合并前的硬上限。没有记下上限的历史检查点仍按这个数恢复，避免重测时追加调用。
 LEGACY_BUILDER_TURNS = 6
 LEGACY_MAX_REPAIRS = 2
@@ -313,7 +317,7 @@ def _tool(name: str, description: str, properties: dict, required: list[str]) ->
 def role_tools(role: str) -> list[dict]:
     tools = [
         _tool("read_file", "读取当前产物中的一个源文件", {"path": {"type": "string", "enum": sorted(ALLOWED_FILES)}}, ["path"]),
-        _tool("run_checks", "真实运行语法、产物护栏、受限导入、HTTP主路径检查；不代表人工业务验收", {}, []),
+        _tool("run_checks", "真实运行语法、产物护栏、受限导入和 HTTP 主路径检查。主路径是 POST /generate，请求体见任务中的 smoke_request，必须返回 HTTP 2xx；不代表人工业务验收", {}, []),
         _tool("handoff", "开发者交给验证者；验证者交回开发者修复，修复轮数有硬上限", {"reason": {"type": "string"}}, ["reason"]),
     ]
     if role == "builder":
@@ -328,7 +332,50 @@ def role_tools(role: str) -> list[dict]:
     return tools
 
 
+def _smoke_body_for(run: FactoryRun, prd: dict) -> dict:
+    return main_smoke_body(
+        idea=iteration.effective_idea(run),
+        prd=prd,
+        scenarios=iteration.json_list(getattr(run, "acceptance_scenarios", None)),
+    )
+
+
+def failure_signature(diagnosis: str) -> str:
+    """同一类检查失败的可比对文本。端口和空白变化不另算一种原因。"""
+    text = " ".join(str(diagnosis or "").split()).casefold()
+    text = re.sub(r"https?://127\.0\.0\.1:\d+", "http://127.0.0.1:<port>", text)
+    text = re.sub(r"127\.0\.0\.1:\d+", "127.0.0.1:<port>", text)
+    return text[:800]
+
+
+def _observe_failure(state: dict, diagnosis: str) -> int:
+    signature = failure_signature(diagnosis)
+    if signature and state.get("failure_signature") == signature:
+        streak = int(state.get("failure_streak") or 1) + 1
+    else:
+        streak = 1
+    state["failure_signature"] = signature
+    state["failure_streak"] = streak
+    return streak
+
+
+def _clear_failure_streak(state: dict) -> None:
+    state["failure_signature"] = ""
+    state["failure_streak"] = 0
+
+
+def _repeat_stop_reason(diagnosis: str) -> str:
+    lines = [line.strip() for line in str(diagnosis or "").splitlines() if line.strip()]
+    brief = " ".join((lines[-1] if lines else "自动检查未通过").split())[:180]
+    return (
+        f"同一失败原因已连续出现{REPEAT_FAILURE_LIMIT}次，提前停止自动修复，不再占用剩余修复轮次。"
+        f"最近一次检查：{brief}。"
+        "下一步：按这条报错修改主路径，或收窄需求后创建修改版本，不要原样重跑。"
+    )
+
+
 def _context(run: FactoryRun, prd: dict, state: dict) -> dict:
+    smoke_body = _smoke_body_for(run, prd)
     return {
         "idea": iteration.effective_idea(run), "prd": prd,
         "source_context": iteration.json_dict(run.parent_context),
@@ -341,6 +388,8 @@ def _context(run: FactoryRun, prd: dict, state: dict) -> dict:
             "files": ["app.py", "requirements.txt", "README.md"],
             "order": "没有父版本源码且 files 为空时不要 read_file。先单独写短的 app.py 主路径，再把 requirements.txt 与 README.md 放在同一次 write_files。写完立刻 run_checks，通过后再 handoff。",
             "scope": "只保证页面和 POST /generate 主路径可运行。付费、海报、分享、账号用简化实现或省略，app.py 必须短到一次输出能写完。内嵌页面用 r\"\"\"，避免 JS 字符串里出现真换行。",
+            "smoke_request": smoke_body,
+            "smoke_contract": smoke_contract_note(smoke_body),
         },
     }
 
@@ -468,12 +517,33 @@ def _execute_tool(session: Session, run: FactoryRun, state: dict, task: dict, st
         return {"written": sorted(files), "source_hash": source_hash(run.id), "js_newline_repaired": repaired}
     if name == "run_checks":
         snapshot = source_hash(run.id)
-        passed, diagnosis = testing.run_tests(run.id, idea=run.idea, output_type=prd.get("output_type"))
+        passed, raw_diagnosis = testing.run_tests(
+            run.id,
+            idea=run.idea,
+            output_type=prd.get("output_type"),
+            prd=prd,
+            scenarios=iteration.json_list(getattr(run, "acceptance_scenarios", None)),
+        )
         if snapshot != source_hash(run.id):
-            passed, diagnosis = False, "检查期间源文件发生变化，需要重新检查"
+            passed, raw_diagnosis = False, "检查期间源文件发生变化，需要重新检查"
+        repeated = False
+        if passed:
+            _clear_failure_streak(state)
+            diagnosis = _public_text(raw_diagnosis, 1200)
+        else:
+            streak = _observe_failure(state, raw_diagnosis)
+            diagnosis = _public_text(raw_diagnosis, 900)
+            if streak >= REPEAT_FAILURE_LIMIT:
+                repeated = True
+                diagnosis = _repeat_stop_reason(raw_diagnosis)
+            elif streak >= REPEAT_FAILURE_LIMIT - 1:
+                diagnosis = _public_text(
+                    diagnosis + " 这与上一次检查失败原因相同。请按报错改主路径；若下一次仍是同一原因，自动修复会停止。",
+                    1200,
+                )
         # Python 编译错误常带源码行；公开记录只呈现最后一行诊断，完整结果留在私有工具会话。
-        public_diagnosis = _public_text((str(diagnosis).splitlines() or ["检查未提供诊断"])[-1], 360)
-        diagnosis = _public_text(diagnosis, 1200)
+        public_source = raw_diagnosis if not repeated else diagnosis
+        public_diagnosis = _public_text((str(public_source).splitlines() or ["检查未提供诊断"])[-1], 360)
         check = {
             "id": step["id"], "round": task["round"], "passed": passed,
             "summary": "自动技术检查通过；业务效果待人工验收" if passed else public_diagnosis, "created_at": _now(),
@@ -485,7 +555,16 @@ def _execute_tool(session: Session, run: FactoryRun, state: dict, task: dict, st
         # 与旧 gates/复盘契约一致：只记录真实运行检查所得结果。
         session.add(StageEvent(run_id=run.id, stage="testing", event_type="test_result", payload="passed" if passed else f"failed: {diagnosis}"))
         step["summary"] = check["summary"]
-        return {"passed": passed, "diagnosis": diagnosis, "source_hash": snapshot, "business_acceptance": "pending_human"}
+        if repeated:
+            state["status"] = "failed"
+            state["stop_reason"] = diagnosis
+            run.failure_code = "agent_execution_failed"
+            run.failure_reason = diagnosis
+            task.update(status="failed", finished_at=_now(), output_summary=diagnosis)
+        return {
+            "passed": passed, "diagnosis": diagnosis, "source_hash": snapshot,
+            "business_acceptance": "pending_human", "repeated_failure": repeated,
+        }
     if name == "handoff" and task["role"] == "builder":
         if set(read_files(run.id)) != ALLOWED_FILES:
             raise ValueError("交接前需提交完整的三个源文件")
@@ -798,7 +877,9 @@ def execute(session: Session, run: FactoryRun, client, prd: dict) -> bool:
                 if task["role"] == "builder" and _settle_builder_budget(session, run, state, task, prd):
                     continue
                 if state["status"] == "failed":
-                    return False
+                    if run.failure_reason:
+                        return False
+                    return _fail(session, run, state, state.get("stop_reason") or "执行失败")
                 if task["role"] == "builder" and _checked_builder_budget_ready(run, state):
                     return _fail(session, run, state, _builder_budget_reason_for(state))
                 return _fail(session, run, state, _exhausted_public_reason(state, task, run))

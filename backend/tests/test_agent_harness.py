@@ -139,7 +139,8 @@ def test_failed_source_at_budget_is_not_handed_off_as_success(session):
     assert state["status"] == "failed" and "validated_source_hash" not in state
     assert state["checks"] and all(item["passed"] is False for item in state["checks"])
     assert "budget_handoff" not in [step["tool"] for step in state["steps"]]
-    assert state["repair_rounds"] == harness.MAX_REPAIRS
+    assert state["repair_rounds"] < harness.MAX_REPAIRS
+    assert "同一失败原因" in state["stop_reason"]
     run.current_stage, run.status = "gate_failed", "done"
     session.commit()
     assert not harness.can_recover_builder_budget(run)
@@ -295,6 +296,41 @@ class FixingMock(SafeMock):
         return response
 
 
+class DistinctSyntaxMock(FixingMock):
+    """每一轮写出不同的语法错误，失败原因不重复，因此仍走满修复上限。"""
+
+    def agent_turn(self, role, messages, tools, context):
+        response = super().agent_turn(role, messages, tools, context)
+        current = response["tool_calls"][0]
+        if role == "builder" and current["name"] == "write_files":
+            current["arguments"]["files"]["app.py"] = f"def broken_{context['repair_round']}(:\n"
+        return response
+
+
+def test_distinct_failures_still_stop_at_repair_cap(session):
+    run = make_run(session)
+    assert not harness.execute(session, run, DistinctSyntaxMock(always_bad=True), PRD)
+    state = harness.load_state(run)
+    assert state["repair_rounds"] == harness.MAX_REPAIRS and state["status"] == "failed"
+    assert "同一失败原因" not in state["stop_reason"]
+    assert len(state["tasks"]) == 2 * (harness.MAX_REPAIRS + 1)
+    assert len(state["checks"]) == 2 * (harness.MAX_REPAIRS + 1)
+    assert not harness.execution_view(run)["resumable"]
+
+
+def test_builder_context_includes_smoke_contract(session):
+    run = make_run(session, acceptance_scenarios=json.dumps([
+        {"id": "main-flow", "title": "主流程是否走通", "input": "选择塔罗抽牌", "expected_output": "看到一张牌"}
+    ], ensure_ascii=False))
+    state = harness._new_state()
+    context = harness._context(run, PRD, state)
+    assert context["build_contract"]["smoke_request"] == {"input": "选择塔罗抽牌"}
+    assert "POST /generate" in context["build_contract"]["smoke_contract"]
+    prompt = (harness.PROMPTS / "agent_builder.md").read_text(encoding="utf-8")
+    assert "smoke_request" in prompt and "HTTP 2xx" in prompt
+    assert "ping" not in prompt
+
+
 def test_real_syntax_failure_reaches_repair_context_and_passes(session):
     run = make_run(session)
     client = FixingMock()
@@ -311,9 +347,10 @@ def test_repair_budget_exhaustion_cannot_resume_or_retest(session):
     run = make_run(session)
     assert not harness.execute(session, run, FixingMock(always_bad=True), PRD)
     state = harness.load_state(run)
-    assert state["repair_rounds"] == harness.MAX_REPAIRS and state["status"] == "failed"
-    assert len(state["tasks"]) == 2 * (harness.MAX_REPAIRS + 1) and len(state["checks"]) == 2 * (harness.MAX_REPAIRS + 1)
-    assert all(n == 3 for n in state["turns"].values())
+    assert state["status"] == "failed"
+    assert "同一失败原因" in state["stop_reason"]
+    assert state["repair_rounds"] < harness.MAX_REPAIRS
+    assert len(state["checks"]) < 2 * (harness.MAX_REPAIRS + 1)
     assert not harness.execution_view(run)["resumable"]
     with pytest.raises(AppError, match="中断检查点"):
         engine.prepare_execution_resume(session, run)
