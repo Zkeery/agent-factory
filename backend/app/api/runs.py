@@ -89,6 +89,7 @@ def _run_out(session: Session, run: FactoryRun) -> RunOut:
     evidence = session.query(EvidenceItem).filter(EvidenceItem.run_id == run.id).order_by(EvidenceItem.id.desc()).all()
     metric = session.query(RunMetric).filter(RunMetric.run_id == run.id).first()
     shown_number, shown_parent = presentation(session, [run])[run.id]
+    revised = iteration.parents_with_revisions(session, [run.id])
     return RunOut(
         id=run.id,
         idea=run.idea,
@@ -116,6 +117,8 @@ def _run_out(session: Session, run: FactoryRun) -> RunOut:
         acceptance_checklist=iteration.json_list(run.acceptance_checklist),
         acceptance_note=run.acceptance_note or "",
         accepted_at=run.accepted_at,
+        acceptance_outcome=iteration.acceptance_outcome(run),
+        revision_created=run.id in revised,
         decisions=[
             DecisionOut(
                 code=d.code, question=d.question, options=d.options,
@@ -187,11 +190,12 @@ def create_run(body: CreateRunRequest, session: Session = Depends(get_session), 
     return _run_out(session, run)
 
 
-def _run_summary(run: FactoryRun, version_no: int, parent_run_id: str | None) -> RunSummary:
+def _run_summary(run: FactoryRun, version_no: int, parent_run_id: str | None, revision_created: bool = False) -> RunSummary:
     return RunSummary(
         id=run.id, idea=run.idea, current_stage=run.current_stage, status=run.status, created_at=run.created_at,
         project_id=run.project_id, auto_schedule_id=getattr(run, "auto_schedule_id", None), parent_run_id=parent_run_id,
         execution_mode=run.execution_mode or "workflow", version_no=version_no,
+        acceptance_outcome=iteration.acceptance_outcome(run), revision_created=revision_created,
     )
 
 
@@ -201,7 +205,8 @@ def list_runs(session: Session = Depends(get_session), user: User = Depends(get_
         FactoryRun.user_id == user.id, active_run_filter(), visible_version_filter(),
     ).order_by(FactoryRun.created_at.desc()).all()
     shown = presentation(session, runs)
-    return RunListOut(runs=[_run_summary(r, *shown[r.id]) for r in runs])
+    revised = iteration.parents_with_revisions(session, [r.id for r in runs])
+    return RunListOut(runs=[_run_summary(r, *shown[r.id], revision_created=r.id in revised) for r in runs])
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)
@@ -626,10 +631,17 @@ def reject_run(run_id: str, body: AcceptanceRejectRequest, session: Session = De
         if run.current_stage != Stage.AWAITING_ACCEPTANCE.value:
             raise AppError("acceptance_not_reviewable", "只有待人工验收的版本可以记录未通过，请先打开待验收版本", 409)
         note = body.note.strip()
+        iteration.apply_main_flow_feedback(run, body.main_passed)
         latest = session.query(StageEvent).filter(
             StageEvent.run_id == run_id, StageEvent.event_type == "human_acceptance_rejected",
         ).order_by(StageEvent.id.desc()).first()
-        repeated = run.acceptance_note == note and latest is not None and iteration.json_dict(latest.payload).get("note") == note
+        latest_payload = iteration.json_dict(latest.payload) if latest is not None else {}
+        repeated = (
+            run.acceptance_note == note
+            and latest is not None
+            and latest_payload.get("note") == note
+            and latest_payload.get("main_passed") == body.main_passed
+        )
         run.acceptance_note = note
         confirmation = session.query(Confirmation).filter(
             Confirmation.run_id == run_id, Confirmation.kind == "acceptance",
@@ -637,9 +649,12 @@ def reject_run(run_id: str, body: AcceptanceRejectRequest, session: Session = De
         if confirmation is not None:
             confirmation.status = "pending"
         if not repeated:
+            payload = {"note": note}
+            if body.main_passed is not None:
+                payload["main_passed"] = body.main_passed
             session.add(StageEvent(
                 run_id=run.id, stage=run.current_stage, event_type="human_acceptance_rejected",
-                payload=iteration.dump({"note": note}),
+                payload=iteration.dump(payload),
             ))
         session.commit()
         return _run_out(session, run)

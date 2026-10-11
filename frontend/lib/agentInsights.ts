@@ -1,4 +1,4 @@
-import { getToken } from "./factory";
+import { acceptanceStatusText, getToken } from "./factory";
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8010";
 
@@ -77,6 +77,8 @@ export interface ReviewRow {
   estimated_cost: number | null;
   accounting_version: string | number | null;
   parent_run_id: string | null;
+  acceptance_outcome?: "pending" | "rejected" | "accepted" | null;
+  revision_created?: boolean;
 }
 
 export interface ProjectReviewData {
@@ -197,7 +199,7 @@ export function projectReviewCsv(data: ProjectReviewData): string {
     ["迭代基线未通过", "可比较", "已修复", "待验证", "未计入", "新增未通过"],
     [data.iteration.baseline_failed, data.iteration.comparable, data.iteration.fixed, data.iteration.pending, data.iteration.excluded, data.iteration.new_failures], [],
     ["Run ID", "项目ID", "想法", "阶段", "来源", "执行方式", "创建时间", "验收时间", "交付用时（秒）", "执行用时（秒）", "估算成本", "币种", "计费口径版本", "父Run ID"],
-    ...data.rows.map((row) => [row.run_id, row.project_id, row.idea, row.stage, row.source, row.execution_mode, row.created_at, row.accepted_at, row.delivery_seconds, row.execution_seconds, row.estimated_cost, data.currency, row.accounting_version, row.parent_run_id]),
+    ...data.rows.map((row) => [row.run_id, row.project_id, row.idea, acceptanceStatusText(row) || row.stage, row.source, row.execution_mode, row.created_at, row.accepted_at, row.delivery_seconds, row.execution_seconds, row.estimated_cost, data.currency, row.accounting_version, row.parent_run_id]),
     [], ["说明"], ...data.notes.map((note) => [note]),
   ];
   return "\uFEFF" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
