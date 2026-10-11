@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   STAGE_CN,
+  acceptanceStatusText,
+  userStageLabel,
   STAGE_ORDER,
   deriveMessages,
   filterArtifactsForRole,
@@ -85,6 +87,33 @@ describe("阶段映射", () => {
     for (const s of STAGE_ORDER) {
       expect(STAGE_CN[s]).toBeTruthy();
     }
+  });
+
+  it("主流程没走通显示验收未通过，有修改版时附带提示", () => {
+    const failed = {
+      current_stage: "awaiting_acceptance" as const,
+      acceptance_scenarios: [{ id: "scenario-1", title: "记下开支", input: "填写午餐", expected_output: "看得到" }],
+      acceptance_results: [{ scenario_id: "scenario-1", passed: false, observation: "字体都是歪的，都是反的。" }],
+    };
+    expect(acceptanceStatusText(failed)).toBe("验收未通过");
+    expect(userStageLabel(failed, "pm")).toBe("验收未通过");
+    expect(userStageLabel(failed, "dev")).toBe("验收未通过");
+    expect(userStageLabel({ ...failed, revision_created: true })).toBe("验收未通过 · 已生成修改版");
+    expect(acceptanceStatusText({
+      current_stage: "awaiting_acceptance",
+      acceptance_outcome: "pending",
+      revision_created: true,
+    })).toBe("待验收 · 已生成修改版");
+    expect(userStageLabel({
+      current_stage: "awaiting_acceptance",
+      acceptance_scenarios: failed.acceptance_scenarios,
+      acceptance_results: [
+        { scenario_id: "scenario-1", passed: true, observation: "主流程走通" },
+        { scenario_id: "scenario-2", passed: false, observation: "导出是空的" },
+      ],
+    })).toBe("待验收");
+    expect(userStageLabel({ current_stage: "delivered", acceptance_outcome: "accepted" })).toBe("已交付");
+    expect(userStageLabel({ current_stage: "awaiting_acceptance", accepted_at: "2026-10-11T00:00:00Z" })).toBe("已交付");
   });
 
   it("deploying 在 testing 之后", () => {

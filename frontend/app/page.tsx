@@ -33,6 +33,8 @@ import {
   needsWorkspaceAuth,
   PM_STAGE_ORDER,
   pmStageLabel,
+  acceptanceStatusText,
+  userStageLabel,
   pmFailureText,
   scheduleInternalIntro,
   scheduleSkipLine,
@@ -356,10 +358,12 @@ function SessionRail({
       <div className="flex flex-wrap items-center gap-1.5">
         {stages.map((s, i) => {
           const st = stageStatus(current, s);
-          const label = role === "pm" ? pmStageLabel(s) : STAGE_CN[s];
           const isAccept = s === "awaiting_acceptance" && st === "current";
+          const rejected = isAccept && (run.acceptance_outcome === "rejected" || acceptanceStatusText(run)?.startsWith("验收未通过"));
+          const label = isAccept ? (acceptanceStatusText(run) || (role === "pm" ? pmStageLabel(s) : STAGE_CN[s])) : (role === "pm" ? pmStageLabel(s) : STAGE_CN[s]);
           const color =
             st === "done" ? "var(--color-ok)" :
+            rejected ? "var(--danger)" :
             isAccept ? "var(--warn)" :
             st === "current" ? "var(--color-primary)" :
             st === "failed" ? "var(--danger)" :
@@ -375,7 +379,7 @@ function SessionRail({
                   fontWeight: st === "current" ? 600 : 400,
                 }}
               >
-                {isAccept && <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse-dot rounded-full align-middle" style={{ background: "var(--warn)" }} />}
+                {isAccept && <span className={`mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle ${rejected ? "" : "animate-pulse-dot"}`} style={{ background: rejected ? "var(--danger)" : "var(--warn)" }} />}
                 {label}
               </span>
             </div>
@@ -386,15 +390,17 @@ function SessionRail({
       <div className="flex gap-2 overflow-x-auto pb-1">
         {stages.map((s) => {
           const st = stageStatus(current, s);
-          const label = role === "pm" ? pmStageLabel(s) : STAGE_CN[s];
           const isAccept = s === "awaiting_acceptance" && st === "current";
+          const rejected = isAccept && (run.acceptance_outcome === "rejected" || acceptanceStatusText(run)?.startsWith("验收未通过"));
+          const label = isAccept ? (acceptanceStatusText(run) || (role === "pm" ? pmStageLabel(s) : STAGE_CN[s])) : (role === "pm" ? pmStageLabel(s) : STAGE_CN[s]);
           const color =
             st === "done" ? "var(--color-ok)" :
+            rejected ? "var(--danger)" :
             isAccept || st === "current" ? (isAccept ? "var(--warn)" : "var(--color-primary)") :
             st === "failed" ? "var(--danger)" :
             "var(--color-muted)";
           const bg =
-            st === "current" ? (isAccept ? "var(--warn-soft)" : "var(--brand-soft)") :
+            st === "current" ? (rejected ? "var(--danger-soft)" : isAccept ? "var(--warn-soft)" : "var(--brand-soft)") :
             st === "failed" ? "var(--danger-soft)" :
             "var(--color-bg)";
           const icon = st === "done" ? "✓" : st === "failed" ? "✗" : st === "current" ? "◉" : "·";
@@ -432,9 +438,9 @@ function SessionRail({
           )}
           {current === "awaiting_acceptance" && (
             <>
-              <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full" style={{ background: "var(--warn)" }} />
-              <span className="text-xs font-medium" style={{ color: "var(--warn)" }}>
-                待验收：打开成品，确认主流程是否走通。
+              <span className={`h-1.5 w-1.5 rounded-full ${run.acceptance_outcome === "rejected" ? "" : "animate-pulse-dot"}`} style={{ background: run.acceptance_outcome === "rejected" ? "var(--danger)" : "var(--warn)" }} />
+              <span className="text-xs font-medium" style={{ color: run.acceptance_outcome === "rejected" ? "var(--danger)" : "var(--warn)" }}>
+                {acceptanceStatusText(run) || "待验收"}：{run.acceptance_outcome === "rejected" ? "主流程没有走通。" : "打开成品，确认主流程是否走通。"}
               </span>
             </>
           )}
@@ -1505,7 +1511,8 @@ export default function Page() {
           ...preservedScenarioResults(scenarios, run.acceptance_results || [], main.id),
         ]);
       }
-      await rejectRun(run.id, note);
+      await rejectRun(run.id, note, mainPassed);
+      loadAll();
       await restore(run.id);
       const prefix = "请保留已有功能，按下面的反馈修改：\n\n";
       const limit = 4000 - prefix.length;
@@ -1728,9 +1735,9 @@ export default function Page() {
             <div className="conversation-content mx-auto max-w-[980px] space-y-5 px-5 py-7 md:px-7">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 grow basis-[260px]">
-                  <div className="mb-2 flex items-center gap-2 text-[11px] text-muted"><span className="status-badge">{run.parent_run_id ? "修改版" : "初版"}</span><span>{runList.find((item) => item.id === run.id)?.created_at ? formatApiDate(runList.find((item) => item.id === run.id)!.created_at) : "当前项目"}</span><span>·</span><span>{pmStageLabel(run.current_stage)}</span></div>
-                  <h1 className="text-xl font-semibold leading-8 tracking-tight">{run.status === "paused" ? "任务已暂停，可以从检查点继续" : run.current_stage === "awaiting_answers" ? "先把关键需求聊清楚" : run.current_stage === "awaiting_prd_confirm" ? "确认这一版要做什么" : run.current_stage === "awaiting_acceptance" ? "确认主流程是否走通" : run.current_stage === "delivered" ? "这一版已完成交付" : ["failed", "gate_failed", "cancelled"].includes(run.current_stage) ? "构建需要你的关注" : "正在把想法变成应用"}</h1>
-                  <p className="mt-1 text-xs leading-6 text-muted">{run.current_stage === "awaiting_answers" ? "一次回答一个问题。选择方向，或直接写下你的想法。" : run.current_stage === "awaiting_prd_confirm" ? "在成果区核对需求，在这里确认主流程怎么走通。" : run.current_stage === "awaiting_acceptance" ? "打开成品，走一遍主流程。走通了就可以验收；没走通或还有其他问题，写在反馈里再改一版。" : run.current_stage === "delivered" ? "下载包含源码、需求文档和验证记录的交付包，或继续打磨下一版。" : "阶段进度会自动更新，生成的需求、代码和说明统一放在成果区。"}</p>
+                  <div className="mb-2 flex items-center gap-2 text-[11px] text-muted"><span className="status-badge">{run.parent_run_id ? "修改版" : "初版"}</span><span>{runList.find((item) => item.id === run.id)?.created_at ? formatApiDate(runList.find((item) => item.id === run.id)!.created_at) : "当前项目"}</span><span>·</span><span className={acceptanceStatusText(run)?.startsWith("验收未通过") ? "font-medium text-danger" : ""}>{userStageLabel(run, "pm")}</span></div>
+                  <h1 className="text-xl font-semibold leading-8 tracking-tight">{run.status === "paused" ? "任务已暂停，可以从检查点继续" : run.current_stage === "awaiting_answers" ? "先把关键需求聊清楚" : run.current_stage === "awaiting_prd_confirm" ? "确认这一版要做什么" : run.current_stage === "awaiting_acceptance" ? (run.acceptance_outcome === "rejected" ? "这一版验收未通过" : "确认主流程是否走通") : run.current_stage === "delivered" ? "这一版已完成交付" : ["failed", "gate_failed", "cancelled"].includes(run.current_stage) ? "构建需要你的关注" : "正在把想法变成应用"}</h1>
+                  <p className="mt-1 text-xs leading-6 text-muted">{run.current_stage === "awaiting_answers" ? "一次回答一个问题。选择方向，或直接写下你的想法。" : run.current_stage === "awaiting_prd_confirm" ? "在成果区核对需求，在这里确认主流程怎么走通。" : run.current_stage === "awaiting_acceptance" ? (run.acceptance_outcome === "rejected" ? (run.revision_created ? "主流程没有走通，已生成修改版。这一版仍可打开成品查看，也可以改判走通后交付。" : "主流程没有走通。反馈已留下，确认修改要求后才会创建修改版。") : "打开成品，走一遍主流程。走通了就可以验收；没走通或还有其他问题，写在反馈里再改一版。") : run.current_stage === "delivered" ? "下载包含源码、需求文档和验证记录的交付包，或继续打磨下一版。" : "阶段进度会自动更新，生成的需求、代码和说明统一放在成果区。"}</p>
                 </div>
                 {["awaiting_acceptance", "delivered"].includes(run.current_stage) && <div className="flex flex-wrap gap-2"><button className="button-primary" onClick={handlePreview}><ArrowUpRight size={15} />打开成品</button><button className="button-secondary" onClick={() => { const field = document.querySelector<HTMLTextAreaElement>("#revision-form textarea"); field?.scrollIntoView({ behavior: "smooth", block: "center" }); field?.focus({ preventScroll: true }); }}><GitBranch size={15} />提出修改</button></div>}
               </div>

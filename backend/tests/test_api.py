@@ -134,9 +134,10 @@ def test_list_runs(client):
     assert r1.json()["id"] in ids
     assert ids.index(r2.json()["id"]) < ids.index(r1.json()["id"])
     for r in runs:
-        assert set(r.keys()) == {"id", "idea", "current_stage", "status", "created_at", "project_id", "auto_schedule_id", "parent_run_id", "execution_mode", "version_no"}
+        assert set(r.keys()) == {"id", "idea", "current_stage", "status", "created_at", "project_id", "auto_schedule_id", "parent_run_id", "execution_mode", "version_no", "acceptance_outcome", "revision_created"}
         assert r["execution_mode"] == "workflow"
         assert r["parent_run_id"] is None
+        assert r["acceptance_outcome"] is None and r["revision_created"] is False
 
 
 def test_noncritical_reanswer_at_prd_confirm_regenerates_prd(client):

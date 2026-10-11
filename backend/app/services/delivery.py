@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.errors import AppError
 from app.models import Decision, EvidenceItem, FactoryRun, StageEvent
+from app.services import iteration
 from app.services.stages import Stage
 from app.services.version_visibility import visible_parent_ids
 
@@ -189,9 +190,11 @@ def build_bundle(session: Session, run: FactoryRun) -> DeliveryBundle:
     add("docs/decisions.md", "\n".join(ledger))
 
     accepted_at = getattr(run, "accepted_at", None)
+    outcome = iteration.acceptance_outcome(run)
     acceptance = {
         "run_id": run.id,
         "stage": run.current_stage,
+        "outcome": outcome,
         "mode": getattr(run, "acceptance_mode", None) or "basic",
         "accepted_at": accepted_at.isoformat() if accepted_at else None,
         "note": getattr(run, "acceptance_note", None) or "",
@@ -203,7 +206,9 @@ def build_bundle(session: Session, run: FactoryRun) -> DeliveryBundle:
     acceptance_lines = ["# 人工验收与真实任务观察", "", f"当前阶段：{run.current_stage}",
                         f"验收模式：{acceptance['mode']}", f"验收时间：{acceptance['accepted_at'] or '未记录'}",
                         f"验收备注：{acceptance['note'] or '未填写'}", ""]
-    if run.current_stage != Stage.DELIVERED.value:
+    if outcome == "rejected":
+        acceptance_lines += ["主流程验收未通过。本包供本地运行与修改使用，不得标为已交付。", ""]
+    elif run.current_stage != Stage.DELIVERED.value:
         acceptance_lines += ["本包供本地运行与验收使用；人工验收尚未通过。", ""]
     if not acceptance["results"]:
         acceptance_lines += ["尚未保存真实任务观察，不能据此宣称真实场景已验证。", ""]
@@ -239,7 +244,7 @@ def build_bundle(session: Session, run: FactoryRun) -> DeliveryBundle:
     if run.execution_mode == "agent_team":
         from app.services.agent_harness import execution_view
         add("docs/execution.json", json.dumps(execution_view(run), ensure_ascii=False, indent=2))
-    status = "人工验收已通过" if run.current_stage == Stage.DELIVERED.value else "待人工验收"
+    status = "人工验收已通过" if outcome == "accepted" else "验收未通过" if outcome == "rejected" else "待人工验收"
     add("README.md", f"""# 本地小应用交付包
 
 需求：{run.idea}

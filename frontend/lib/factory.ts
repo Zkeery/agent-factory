@@ -100,6 +100,8 @@ export interface Run {
   acceptance_checklist?: AcceptanceChecklistItem[];
   acceptance_note?: string;
   accepted_at?: string | null;
+  acceptance_outcome?: AcceptanceOutcome | null;
+  revision_created?: boolean;
   prd_revision?: number;
   decisions: Decision[];
   evidence: Evidence[];
@@ -125,6 +127,8 @@ export interface RunSummary {
   auto_schedule_id?: string | null;
   parent_run_id?: string | null;
   version_no?: number;
+  acceptance_outcome?: AcceptanceOutcome | null;
+  revision_created?: boolean;
 }
 
 export interface RunList {
@@ -625,6 +629,64 @@ export function pmStageLabel(stage: Stage): string {
   return STAGE_CN[stage];
 }
 
+export type AcceptanceOutcome = "pending" | "rejected" | "accepted";
+
+/** 主流程没走通时的用户文案。阶段字段仍是待验收，交付与修改版入口不变。 */
+export function acceptanceStatusText(input: {
+  current_stage?: string | null;
+  stage?: string | null;
+  acceptance_outcome?: AcceptanceOutcome | null;
+  revision_created?: boolean;
+  accepted_at?: string | null;
+  acceptance_scenarios?: AcceptanceScenario[];
+  acceptance_results?: AcceptanceScenarioResult[];
+  acceptance_checklist?: AcceptanceChecklistItem[];
+}): string | null {
+  const stage = input.current_stage || input.stage || "";
+  const outcome = input.acceptance_outcome !== undefined && input.acceptance_outcome !== null
+    ? input.acceptance_outcome
+    : inferAcceptanceOutcome(input);
+  if (outcome === "accepted" || stage === "delivered") return null;
+  if (outcome !== "rejected" && stage !== "awaiting_acceptance") return null;
+  const base = outcome === "rejected" ? "验收未通过" : "待验收";
+  return input.revision_created && stage === "awaiting_acceptance" ? `${base} · 已生成修改版` : base;
+}
+
+function inferAcceptanceOutcome(input: {
+  current_stage?: string | null;
+  stage?: string | null;
+  accepted_at?: string | null;
+  acceptance_scenarios?: AcceptanceScenario[];
+  acceptance_results?: AcceptanceScenarioResult[];
+  acceptance_checklist?: AcceptanceChecklistItem[];
+}): AcceptanceOutcome | null {
+  const stage = input.current_stage || input.stage || "";
+  if (input.accepted_at || stage === "delivered") return "accepted";
+  if (stage !== "awaiting_acceptance") return null;
+  const scenarios = input.acceptance_scenarios || [];
+  const results = input.acceptance_results || [];
+  const main = scenarios.length ? mainFlowScenario(scenarios) : undefined;
+  if (main) {
+    const result = results.find((item) => item.scenario_id === main.id);
+    if (!result) return "pending";
+    return result.passed ? "pending" : "rejected";
+  }
+  if (results.some((item) => item.passed === false)) return "rejected";
+  if ((input.acceptance_checklist || []).some((item) => item.id === "main_flow" && item.passed === false)) return "rejected";
+  return "pending";
+}
+
+export function userStageLabel(
+  run: { current_stage: Stage | string; acceptance_outcome?: AcceptanceOutcome | null; revision_created?: boolean; accepted_at?: string | null; acceptance_scenarios?: AcceptanceScenario[]; acceptance_results?: AcceptanceScenarioResult[]; acceptance_checklist?: AcceptanceChecklistItem[] },
+  role: ViewRole = "pm",
+): string {
+  if (run.acceptance_outcome === "accepted" || run.accepted_at || run.current_stage === "delivered") return "已交付";
+  const acceptance = acceptanceStatusText(run);
+  if (acceptance) return acceptance;
+  const stage = run.current_stage as Stage;
+  return role === "pm" ? pmStageLabel(stage) : (STAGE_CN[stage] || stage);
+}
+
 const TERMINAL: Stage[] = ["delivered", "gate_failed", "failed", "cancelled"];
 
 /** 对话消息类型 */
@@ -856,11 +918,11 @@ export const acceptRun = (
     body: JSON.stringify({ checklist, note, scenario_results: scenarioResults }),
   });
 
-export const rejectRun = (id: string, note: string) =>
+export const rejectRun = (id: string, note: string, mainPassed?: boolean) =>
   api<Run>(`/api/v1/runs/${id}/reject`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ note }),
+    body: JSON.stringify({ note, ...(mainPassed === undefined ? {} : { main_passed: mainPassed }) }),
   });
 
 /** 管理一次"造物运行"的提交、SSE 订阅与状态回放。 */

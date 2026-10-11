@@ -170,6 +170,8 @@ class RunSummary(BaseModel):
     parent_run_id: str | None = None
     execution_mode: Literal["workflow", "agent_team"] = "workflow"
     version_no: int = 0
+    acceptance_outcome: Literal["pending", "rejected", "accepted"] | None = None
+    revision_created: bool = False
 
 
 class RunListOut(BaseModel):
@@ -216,6 +218,8 @@ class RunOut(BaseModel):
     acceptance_checklist: list[AcceptChecklistItem] = Field(default_factory=list)
     acceptance_note: str = ""
     accepted_at: datetime | None = None
+    acceptance_outcome: Literal["pending", "rejected", "accepted"] | None = None
+    revision_created: bool = False
     decisions: list[DecisionOut] = []
     evidence: list[EvidenceOut] = []
     metric: RunMetricOut | None = None
@@ -268,6 +272,7 @@ class AcceptRunRequest(BaseModel):
 class AcceptanceRejectRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     note: str = Field(min_length=1, max_length=4000)
+    main_passed: bool | None = None
 
 
 class WorkspaceAuthorizeRequest(BaseModel):

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { FolderOpen, GitBranch, RotateCcw, Search, Trash2 } from "lucide-react";
 import { formatApiDateTime } from "@/lib/dateTime";
-import { pmStageLabel, STAGE_CN, type Project, type Run, type RunSummary, type ViewRole } from "@/lib/factory";
+import { userStageLabel, type Project, type Run, type RunSummary, type ViewRole } from "@/lib/factory";
 import { matchesProject, projectEntries, projectVersionNumber, sortProjectVersions } from "@/lib/projectNavigation";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +41,7 @@ export function ProjectNavigation({ projects, runs, deletedProjects, currentId, 
         const latest = entry.versions.at(-1);
         const active = currentProjectId ? entry.key === `project:${currentProjectId}` : entry.versions.some((version) => version.id === currentId);
         const count = Math.max(entry.project?.run_count ?? 0, entry.versions.length);
-        const stage = latest ? role === "pm" ? pmStageLabel(latest.current_stage) : STAGE_CN[latest.current_stage] : count ? "正在加载版本…" : "尚未开始构建";
+        const stage = latest ? userStageLabel(latest, role) : count ? "正在加载版本…" : "尚未开始构建";
         return <div key={entry.key} className={cn("flex items-center rounded-lg transition", active ? "bg-brand-soft" : "hover:bg-surface-2")}>
           <button type="button" disabled={busy || !latest} aria-label={`打开项目：${entry.name}`} aria-current={active ? "page" : undefined} title={entry.name}
             className="min-w-0 flex-1 rounded-lg py-3 pl-3 pr-1 text-left text-xs disabled:cursor-default"
@@ -79,8 +79,8 @@ export function ProjectVersionPicker({ run, runs, busy, role, onSelect }: {
       onChange={(event) => { if (event.target.value !== run.id) onSelect(event.target.value); }}>
       {!currentListed && <option value={run.id}>当前版本</option>}
       {[...versions].reverse().map((version, index) => {
-        const stage = version.id === run.id ? run.current_stage : version.current_stage;
-        return <option key={version.id} value={version.id}>V{projectVersionNumber(version, versions)} · {version.parent_run_id ? "修改版" : "初版"}{index === 0 ? " · 最新" : ""}{version.auto_schedule_id ? " · 自动" : ""} · {formatApiDateTime(version.created_at)} · {role === "pm" ? pmStageLabel(stage) : STAGE_CN[stage]}</option>;
+        const source = version.id === run.id ? run : version;
+        return <option key={version.id} value={version.id}>V{projectVersionNumber(version, versions)} · {version.parent_run_id ? "修改版" : "初版"}{index === 0 ? " · 最新" : ""}{version.auto_schedule_id ? " · 自动" : ""} · {formatApiDateTime(version.created_at)} · {userStageLabel(source, role)}</option>;
       })}
     </select>
   </div>;

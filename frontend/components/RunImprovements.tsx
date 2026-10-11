@@ -219,7 +219,12 @@ export function MainFlowAcceptance({ run, busy, onAccept, onFeedback }: {
   const main = mainFlowScenario(scenarios);
   const scenarioMode = run.acceptance_mode === "scenario";
   const extraCount = scenarios.filter((item) => item.id !== main?.id).length;
-  const [choice, setChoice] = useState<"passed" | "failed" | null>(null);
+  const savedMain = main ? (run.acceptance_results || []).find((item) => item.scenario_id === main.id) : undefined;
+  const [choice, setChoice] = useState<"passed" | "failed" | null>(() => {
+    if (run.acceptance_outcome === "rejected") return "failed";
+    if (savedMain) return savedMain.passed ? "passed" : "failed";
+    return null;
+  });
   const [note, setNote] = useState(() => run.acceptance_note && run.acceptance_note !== "验收通过" ? run.acceptance_note : "");
   const [error, setError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
@@ -300,6 +305,7 @@ export function MainFlowAcceptance({ run, busy, onAccept, onFeedback }: {
             onChange={(event) => { setNote(event.target.value); setSavedMessage(null); }} />
         </label>
         <p className="text-[11px] leading-relaxed" style={mutedStyle}>{hint}</p>
+        {run.acceptance_outcome === "rejected" && <p className="text-xs leading-relaxed text-danger">验收未通过。{run.revision_created ? "已生成修改版。" : "确认修改要求后才会创建修改版。"}</p>}
         {savedMessage && <SavedMessage>{savedMessage}</SavedMessage>}
         <ErrorMessage message={error} />
       </div>
@@ -344,13 +350,14 @@ export function BundleDownload({ run }: { run: Run }) {
   const [error, setError] = useState<string | null>(null);
   if (!["gate_passed", "awaiting_acceptance", "delivered"].includes(run.current_stage)) return null;
   const delivered = run.current_stage === "delivered";
+  const rejected = !delivered && run.acceptance_outcome === "rejected";
   return (
     <section className={cardClass} style={cardStyle}>
       <div className="flex items-start gap-3 border-b px-5 py-4" style={lineStyle}>
         <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${delivered ? "bg-ok-soft text-ok" : "bg-brand-soft text-brand"}`}><FolderArchive size={18} strokeWidth={1.8} aria-hidden="true" /></span>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold">完整交付包</h3><span className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium ${delivered ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn"}`}>{delivered && <Check size={11} aria-hidden="true" />}{delivered ? "已验收交付" : "待人工验收"}</span></div>
-          <p className="mt-1 text-xs leading-relaxed" style={mutedStyle}>{delivered ? "本版完整材料与正式验收记录，可留存或继续使用。" : "先下载材料运行和检查；验收通过后可下载正式交付版。"}</p>
+          <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold">完整交付包</h3><span className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium ${delivered ? "bg-ok-soft text-ok" : rejected ? "bg-danger-soft text-danger" : "bg-warn-soft text-warn"}`}>{delivered && <Check size={11} aria-hidden="true" />}{delivered ? "已验收交付" : rejected ? "验收未通过" : "待人工验收"}</span></div>
+          <p className="mt-1 text-xs leading-relaxed" style={mutedStyle}>{delivered ? "本版完整材料与正式验收记录，可留存或继续使用。" : rejected ? "主流程没有走通。材料可以下载查看，不得当作已交付。" : "先下载材料运行和检查；验收通过后可下载正式交付版。"}</p>
         </div>
       </div>
       <div className="space-y-4 p-5">
@@ -360,14 +367,14 @@ export function BundleDownload({ run }: { run: Run }) {
         <ErrorMessage message={error} />
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-surface-2 px-5 py-3" style={lineStyle}>
-        <span className="text-[11px]" style={mutedStyle}>{delivered ? "ZIP 文件 · 包含本版验收结果" : "ZIP 文件 · 待验收版"}</span>
+        <span className="text-[11px]" style={mutedStyle}>{delivered ? "ZIP 文件 · 包含本版验收结果" : rejected ? "ZIP 文件 · 验收未通过" : "ZIP 文件 · 待验收版"}</span>
         <button className={buttonClass} style={buttonStyle} disabled={busy} onClick={async () => {
           setBusy(true);
           setError(null);
           try { await downloadRunBundle(run.id, delivered); }
           catch (err) { setError(err instanceof Error ? err.message : "交付包下载失败，请重试。"); }
           finally { setBusy(false); }
-        }}><ButtonIcon busy={busy} icon={Download} />{busy ? "准备下载…" : delivered ? "下载完整交付包" : "下载待验收版"}</button>
+        }}><ButtonIcon busy={busy} icon={Download} />{busy ? "准备下载…" : delivered ? "下载完整交付包" : rejected ? "下载当前版本" : "下载待验收版"}</button>
       </div>
     </section>
   );
