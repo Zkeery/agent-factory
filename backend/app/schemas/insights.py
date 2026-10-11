@@ -71,6 +71,8 @@ class ReviewRunRow(BaseModel):
     estimated_cost: float | None
     accounting_version: int
     parent_run_id: str | None
+    acceptance_outcome: Literal["pending", "rejected", "accepted"] | None = None
+    revision_created: bool = False
 
 
 class ReviewOut(BaseModel):

@@ -206,6 +206,26 @@ def test_iteration_does_not_claim_real_improvement_over_mock_baseline(session):
     assert value["metrics"]["iteration_fix_rate"]["value"] is None
 
 
+def test_rejected_acceptance_stays_pending_in_delivery_rate_and_names_the_verdict(session):
+    scenarios = json.dumps([{"id": "scenario-1", "title": "主流程", "input": "记一笔", "expected_output": "看得到"}], ensure_ascii=False)
+    parent = _run(
+        session, "parent", stage="awaiting_acceptance", acceptance_scenarios=scenarios,
+        acceptance_results=json.dumps([{"scenario_id": "scenario-1", "passed": False, "observation": "字体是反的"}], ensure_ascii=False),
+    )
+    _run(session, "child", stage="building", parent_run_id=parent.id)
+    untouched = _run(session, "untouched", stage="awaiting_acceptance")
+    _run(session, "revision", stage="idea_submitted", parent_run_id=untouched.id)
+    value = _review(session)
+    assert value["counts"]["delivered"] == 0 and value["counts"]["failed"] == 0 and value["counts"]["cancelled"] == 0
+    assert value["counts"]["pending"] == 4
+    assert value["metrics"]["delivery_rate"]["denominator"] == 0
+    rows = {row["run_id"]: row for row in value["rows"]}
+    assert rows["parent"]["stage"] == "awaiting_acceptance"
+    assert rows["parent"]["acceptance_outcome"] == "rejected" and rows["parent"]["revision_created"] is True
+    assert rows["untouched"]["acceptance_outcome"] == "pending" and rows["untouched"]["revision_created"] is True
+    assert rows["child"]["acceptance_outcome"] is None and rows["child"]["revision_created"] is False
+
+
 def test_iteration_missing_baseline_is_null(session):
     parent = _run(session, "parent")
     _run(session, "child", parent_run_id=parent.id, parent_context="{}")

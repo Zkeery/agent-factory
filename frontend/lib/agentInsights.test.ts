@@ -93,6 +93,17 @@ describe("复盘口径与导出", () => {
     expect(csv).toContain('"样本数","未计入数","统计口径"');
     expect(csv).toContain("估算成本，不是服务商账单");
     expect(csv).toContain('"迭代基线未通过","可比较","已修复","待验证","未计入","新增未通过"');
+    expect(csv).toContain('"待验收"');
+    const rejected = {
+      ...snapshot,
+      rows: [{
+        ...snapshot.rows[0],
+        stage: "awaiting_acceptance",
+        acceptance_outcome: "rejected" as const,
+        revision_created: true,
+      }],
+    };
+    expect(projectReviewCsv(rejected)).toContain('"验收未通过 · 已生成修改版"');
   });
 
   it("CSV对想法里的公式前缀和引号换行安全转义，不改原记录", () => {

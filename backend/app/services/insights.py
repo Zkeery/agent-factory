@@ -13,6 +13,7 @@ from app.core.errors import AppError
 from app.models import FactoryRun, ProductProject, RunMetric, StageEvent
 from app.services.project_lifecycle import active_run_filter
 from app.services.metrics import configured_currency, pricing_snapshots, run_source
+from app.services.iteration import acceptance_outcome, parents_with_revisions
 from app.services.version_visibility import visible_parent_ids
 
 SOURCES = {"real", "mock", "unknown", "all"}
@@ -227,6 +228,8 @@ def build_review(session: Session, user_id: str, *, source: str = "real", days: 
             "estimated_cost": None if accounting_incomplete else _cost(metric, sources[run.id], currency),
             "accounting_version": metric.accounting_version or 0 if metric else 0,
             "parent_run_id": run.parent_run_id,
+            "acceptance_outcome": acceptance_outcome(run),
+            "revision_created": False,
         })
     run_ids = {run.id for run in runs}
     latest_checks = {}
@@ -280,6 +283,9 @@ def build_review(session: Session, user_id: str, *, source: str = "real", days: 
     if hidden_from_list:
         notes.append(f"{hidden_from_list} 条已被整段重跑替代的失败版本仍计入上方统计，不再列入版本记录。")
     resolved_parents = visible_parent_ids(session, [row["parent_run_id"] for row in shown_rows])
+    revised = parents_with_revisions(session, [row["run_id"] for row in shown_rows])
+    for row in shown_rows:
+        row["revision_created"] = row["run_id"] in revised
     for row in shown_rows:
         if row["parent_run_id"]:
             row["parent_run_id"] = resolved_parents.get(row["parent_run_id"], row["parent_run_id"])

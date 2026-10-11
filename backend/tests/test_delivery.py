@@ -75,6 +75,25 @@ def test_bundle_contains_complete_local_application_and_documents(client, bundle
         assert json.loads(archive.read("docs/tests.json"))[0]["result"] == "passed"
 
 
+def test_rejected_bundle_names_the_failed_acceptance_and_is_not_delivered(client, session, bundle_run):
+    run, _, _ = bundle_run
+    run.acceptance_results = json.dumps(
+        [{"scenario_id": "main", "passed": False, "observation": "字体都是歪的，都是反的。"}],
+        ensure_ascii=False,
+    )
+    run.acceptance_note = "字体都是歪的，都是反的。"
+    session.commit()
+    with _archive(client.get(f"/api/v1/runs/{run.id}/bundle")) as archive:
+        readme = archive.read("README.md").decode()
+        acceptance = archive.read("docs/acceptance.md").decode()
+        record = json.loads(archive.read("docs/acceptance.json"))
+        assert "状态：验收未通过" in readme
+        assert "人工验收已通过" not in readme
+        assert "主流程验收未通过" in acceptance
+        assert "不得标为已交付" in acceptance
+        assert record["outcome"] == "rejected" and record["stage"] == "awaiting_acceptance"
+
+
 def test_agent_bundle_exports_public_execution_without_private_context(client, session, bundle_run):
     run, _, _ = bundle_run
     run.execution_mode = "agent_team"

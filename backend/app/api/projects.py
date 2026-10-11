@@ -7,18 +7,18 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.runs import get_session
+from app.api.runs import _run_summary, get_session
 from app.core.auth import get_current_user, require_api_key
 from app.core.errors import AppError
 from app.models import FactoryRun, ProductProject, Schedule, User
 from app.services.stages import Stage
+from app.services import iteration
 from app.services.version_visibility import presentation, visible_version_filter
 from app.schemas import (
     CreateProjectRequest,
     ProjectListOut,
     ProjectOut,
     RunListOut,
-    RunSummary,
     UpdateProjectRequest,
 )
 
@@ -142,18 +142,10 @@ def list_project_runs(project_id: str, session: Session = Depends(get_session), 
         .all()
     )
     shown = presentation(session, runs)
+    revised = iteration.parents_with_revisions(session, [r.id for r in runs])
     return RunListOut(
         runs=[
-            RunSummary(
-                id=r.id,
-                idea=r.idea,
-                current_stage=r.current_stage,
-                status=r.status,
-                created_at=r.created_at,
-                project_id=r.project_id,
-                parent_run_id=shown[r.id][1],
-                version_no=shown[r.id][0],
-            )
+            _run_summary(r, shown[r.id][0], shown[r.id][1], revision_created=r.id in revised)
             for r in runs
         ]
     )

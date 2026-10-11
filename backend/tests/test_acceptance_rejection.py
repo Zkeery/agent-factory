@@ -182,3 +182,113 @@ def test_rejection_note_and_observations_are_frozen_into_revision_context(review
     with review.sessions() as session:
         assert iteration.json_dict(session.get(FactoryRun, child_id).parent_context)["acceptance_note"] == "AI 不落子，主链路失败"
     assert review.starts == [child_id]
+
+
+SCENARIOS = [
+    {"id": "scenario-1", "title": "记下开支", "input": "填写午餐 25 元", "expected_output": "列表出现这笔开支"},
+    {"id": "scenario-2", "title": "导出记录", "input": "点击导出", "expected_output": "得到一份记录文件"},
+]
+
+
+def test_saved_main_flow_failure_stays_reviewable_and_displays_rejected(review):
+    results = [{"scenario_id": "scenario-1", "passed": False, "observation": "字体都是歪的，都是反的。"}]
+    run_id = create_review(
+        review, acceptance_mode="scenario",
+        acceptance_scenarios=iteration.dump(SCENARIOS),
+        acceptance_results=iteration.dump(results),
+        acceptance_note="字体都是歪的，都是反的。",
+    )
+    data = review.client.get(f"/api/v1/runs/{run_id}").json()
+    assert data["current_stage"] == "awaiting_acceptance" and data["status"] == "running"
+    assert data["accepted_at"] is None
+    assert data["acceptance_outcome"] == "rejected" and data["revision_created"] is False
+    assert data["acceptance_results"] == results
+    listed = review.client.get("/api/v1/runs").json()["runs"]
+    assert listed[0]["id"] == run_id
+    assert listed[0]["current_stage"] == "awaiting_acceptance"
+    assert listed[0]["acceptance_outcome"] == "rejected" and listed[0]["revision_created"] is False
+
+
+def test_child_revision_is_labeled_without_treating_empty_results_as_rejection(review):
+    parent_id = create_review(
+        review, id="89576e55", acceptance_mode="scenario",
+        acceptance_scenarios=iteration.dump(SCENARIOS),
+    )
+    with review.sessions() as session:
+        session.add(FactoryRun(
+            id="57f73c64", user_id="reviewer", idea="五子棋", status="running",
+            current_stage="awaiting_acceptance", parent_run_id=parent_id, acceptance_mode="scenario",
+            acceptance_scenarios=iteration.dump(SCENARIOS),
+            acceptance_results=iteration.dump([{"scenario_id": "scenario-1", "passed": False, "observation": "字体都是歪的，都是反的。"}]),
+            acceptance_note="字体都是歪的，都是反的。",
+        ))
+        session.commit()
+    parent = review.client.get(f"/api/v1/runs/{parent_id}").json()
+    child = review.client.get("/api/v1/runs/57f73c64").json()
+    assert parent["acceptance_outcome"] == "pending" and parent["revision_created"] is True
+    assert parent["current_stage"] == "awaiting_acceptance" and parent["acceptance_results"] == []
+    assert child["acceptance_outcome"] == "rejected" and child["revision_created"] is False
+    with review.sessions() as session:
+        session.add(FactoryRun(
+            id="be18a34e", user_id="reviewer", idea="五子棋", status="running",
+            current_stage="idea_submitted", parent_run_id="57f73c64",
+        ))
+        session.commit()
+    child = review.client.get("/api/v1/runs/57f73c64").json()
+    assert child["acceptance_outcome"] == "rejected" and child["revision_created"] is True
+    assert child["accepted_at"] is None and child["current_stage"] == "awaiting_acceptance"
+
+
+def test_other_scenario_failure_does_not_reject_a_passed_main_flow(review):
+    results = [
+        {"scenario_id": "scenario-1", "passed": True, "observation": "主流程走通"},
+        {"scenario_id": "scenario-2", "passed": False, "observation": "导出的文件是空的"},
+    ]
+    run_id = create_review(
+        review, acceptance_mode="scenario",
+        acceptance_scenarios=iteration.dump(SCENARIOS),
+        acceptance_results=iteration.dump(results),
+        acceptance_note="导出的文件是空的",
+    )
+    data = review.client.get(f"/api/v1/runs/{run_id}").json()
+    assert data["acceptance_outcome"] == "pending" and data["revision_created"] is False
+    assert data["current_stage"] == "awaiting_acceptance" and data["accepted_at"] is None
+
+
+def test_basic_mode_records_explicit_main_flow_failure_and_can_still_be_delivered(review):
+    run_id = create_review(review)
+    rejected = review.client.post(f"/api/v1/runs/{run_id}/reject", json={"note": "字体是反的", "main_passed": False})
+    assert rejected.status_code == 200, rejected.text
+    data = rejected.json()
+    assert data["current_stage"] == "awaiting_acceptance" and data["accepted_at"] is None
+    assert data["acceptance_outcome"] == "rejected"
+    assert any(item["id"] == "main_flow" and item["passed"] is False for item in data["acceptance_checklist"])
+    accepted = review.client.post(f"/api/v1/runs/{run_id}/accept", json={
+        "checklist": [{"id": "local_run", "label": "主流程走通了", "passed": True}],
+        "note": "验收通过",
+        "scenario_results": [],
+    })
+    assert accepted.status_code == 200, accepted.text
+    delivered = accepted.json()
+    assert delivered["accepted_at"] is not None
+    assert delivered["acceptance_outcome"] == "accepted"
+    assert delivered["acceptance_note"] == "验收通过"
+    assert review.starts == [run_id]
+
+
+def test_other_feedback_after_main_flow_passed_does_not_display_rejection(review):
+    run_id = create_review(review)
+    assert review.client.post(
+        f"/api/v1/runs/{run_id}/reject",
+        json={"note": "字体是反的", "main_passed": False},
+    ).status_code == 200
+    response = review.client.post(
+        f"/api/v1/runs/{run_id}/reject",
+        json={"note": "按钮文案可以再短一点", "main_passed": True},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["acceptance_outcome"] == "pending"
+    assert data["acceptance_note"] == "按钮文案可以再短一点"
+    assert all(item.get("id") != "main_flow" for item in data["acceptance_checklist"])
+    assert data["current_stage"] == "awaiting_acceptance" and data["accepted_at"] is None
