@@ -79,12 +79,13 @@ export interface ReviewRow {
   parent_run_id: string | null;
   acceptance_outcome?: "pending" | "rejected" | "accepted" | null;
   revision_created?: boolean;
+  replacing_version_no?: number | null;
 }
 
 export interface ProjectReviewData {
   generated_at: string;
   filters: ReviewFilters;
-  counts: { total: number; delivered: number; failed: number; cancelled: number; pending: number; real: number; mock: number; unknown: number };
+  counts: { total: number; delivered: number; failed: number; cancelled: number; pending: number; replaced: number; real: number; mock: number; unknown: number };
   metrics: Record<ReviewMetricKey, ReviewMetric>;
   iteration: { baseline_failed: number; comparable: number; fixed: number; pending: number; excluded: number; new_failures: number };
   currency: string;
@@ -194,8 +195,8 @@ export function projectReviewCsv(data: ProjectReviewData): string {
       const metric = data.metrics[key];
       return [label, metric.value, unit === "currency" ? data.currency : unit, metric.numerator, metric.denominator, metric.samples, metric.excluded, metric.definition];
     }), [],
-    ["记录总数", "已交付", "失败", "取消", "待完成", "真实模型", "Mock", "来源未知"],
-    [data.counts.total, data.counts.delivered, data.counts.failed, data.counts.cancelled, data.counts.pending, data.counts.real, data.counts.mock, data.counts.unknown], [],
+    ["记录总数", "已交付", "失败", "取消", "待完成", "验收未通过已替代", "真实模型", "离线演示", "来源未知"],
+    [data.counts.total, data.counts.delivered, data.counts.failed, data.counts.cancelled, data.counts.pending, data.counts.replaced, data.counts.real, data.counts.mock, data.counts.unknown], [],
     ["迭代基线未通过", "可比较", "已修复", "待验证", "未计入", "新增未通过"],
     [data.iteration.baseline_failed, data.iteration.comparable, data.iteration.fixed, data.iteration.pending, data.iteration.excluded, data.iteration.new_failures], [],
     ["Run ID", "项目ID", "想法", "阶段", "来源", "执行方式", "创建时间", "验收时间", "交付用时（秒）", "执行用时（秒）", "估算成本", "币种", "计费口径版本", "父Run ID"],

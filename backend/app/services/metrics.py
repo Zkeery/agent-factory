@@ -187,8 +187,13 @@ def score_run(session: Session, run_id: str, decision: int, prd: int, code: int)
 
 
 def summarize(session: Session, user_id: str | None = None) -> dict:
-    """汇总四个核心数字（按用户隔离；user_id=None 时看全部）。质量合格线：三维均 ≥2 分。"""
-    q = session.query(FactoryRun).filter(active_run_filter())
+    """汇总四个核心数字（按用户隔离；user_id=None 时看全部）。质量合格线：三维均 ≥2 分。
+
+    与版本列表一致：整段重跑后不再展示的失败版本不计入总数和交付率。
+    """
+    from app.services.version_visibility import visible_version_filter
+
+    q = session.query(FactoryRun).filter(active_run_filter(), visible_version_filter())
     if user_id is not None:
         q = q.filter(FactoryRun.user_id == user_id)
     runs = q.all()

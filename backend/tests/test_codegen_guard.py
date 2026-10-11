@@ -4,7 +4,7 @@ from __future__ import annotations
 import py_compile
 from pathlib import Path
 
-from app.services.codegen_guard import check_embedded_js_safety, check_video_produces_video
+from app.services.codegen_guard import check_embedded_js_safety, check_video_produces_video, repair_embedded_js_newlines
 from app.services.mock_llm import generate_code
 
 
@@ -27,6 +27,28 @@ def test_codegen_guard_rejects_broken_js_newline():
     ok, msg = check_embedded_js_safety(broken)
     assert ok is False
     assert ("换行" in msg) or ("嵌入" in msg)
+
+
+def test_repair_embedded_js_newline_before_the_guard():
+    nl = chr(10)
+    broken = (
+        "from fastapi import FastAPI" + nl
+        + "app = FastAPI()" + nl
+        + "PAGE = " + chr(34) * 3 + nl
+        + "<html><body><script>" + nl
+        + 'var msg = "hello' + nl
+        + 'world";' + nl
+        + "</script></body></html>" + nl
+        + chr(34) * 3 + nl
+    )
+    assert check_embedded_js_safety(broken)[0] is False
+    fixed = repair_embedded_js_newlines(broken)
+    ok, msg = check_embedded_js_safety(fixed)
+    assert ok is True, msg
+    namespace: dict = {}
+    exec(fixed + nl + "VALUE = PAGE" + nl, namespace)
+    assert 'var msg = "hello\\nworld";' in namespace["VALUE"]
+    assert repair_embedded_js_newlines(fixed) == fixed
 
 
 def test_codegen_guard_accepts_raw_or_safe():

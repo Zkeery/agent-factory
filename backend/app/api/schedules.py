@@ -94,7 +94,7 @@ def create_schedule(body: CreateScheduleRequest, session: Session = Depends(get_
     session.add(item)
     session.commit()
     session.refresh(item)
-    return _out(item)
+    return _out(item, _pending_runs(session, user.id).get(item.id))
 
 
 @router.patch("/schedules/{schedule_id}", response_model=ScheduleOut)
@@ -112,7 +112,7 @@ def update_schedule(schedule_id: str, body: UpdateScheduleRequest, session: Sess
         item.enabled = body.enabled
     session.commit()
     session.refresh(item)
-    return _out(item)
+    return _out(item, _pending_runs(session, user.id).get(item.id))
 
 
 @router.delete("/schedules/{schedule_id}")

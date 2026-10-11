@@ -172,6 +172,7 @@ class RunSummary(BaseModel):
     version_no: int = 0
     acceptance_outcome: Literal["pending", "rejected", "accepted"] | None = None
     revision_created: bool = False
+    replacing_version_no: int | None = None
 
 
 class RunListOut(BaseModel):
@@ -220,6 +221,7 @@ class RunOut(BaseModel):
     accepted_at: datetime | None = None
     acceptance_outcome: Literal["pending", "rejected", "accepted"] | None = None
     revision_created: bool = False
+    replacing_version_no: int | None = None
     decisions: list[DecisionOut] = []
     evidence: list[EvidenceOut] = []
     metric: RunMetricOut | None = None

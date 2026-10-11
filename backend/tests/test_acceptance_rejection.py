@@ -239,6 +239,39 @@ def test_child_revision_is_labeled_without_treating_empty_results_as_rejection(r
     assert child["accepted_at"] is None and child["current_stage"] == "awaiting_acceptance"
 
 
+def test_rejected_parent_shows_replacing_version_and_keeps_the_record(review):
+    from datetime import timedelta
+
+    results = [{"scenario_id": "scenario-1", "passed": False, "observation": "字体都是歪的，都是反的。"}]
+    start = datetime(2026, 10, 8, tzinfo=timezone.utc)
+    with review.sessions() as session:
+        session.add(ProductProject(id="fortune", user_id="reviewer", name="算命"))
+        session.add(FactoryRun(
+            id="parent-closed", user_id="reviewer", idea="算命", status="running", project_id="fortune",
+            current_stage="awaiting_acceptance", acceptance_mode="scenario",
+            acceptance_scenarios=iteration.dump(SCENARIOS),
+            acceptance_results=iteration.dump(results),
+            acceptance_note="字体都是歪的，都是反的。",
+            created_at=start,
+        ))
+        session.add(FactoryRun(
+            id="child-open", user_id="reviewer", idea="算命", status="running", project_id="fortune",
+            current_stage="building", parent_run_id="parent-closed",
+            created_at=start + timedelta(minutes=5),
+        ))
+        session.commit()
+    parent = review.client.get("/api/v1/runs/parent-closed").json()
+    assert parent["current_stage"] == "awaiting_acceptance"
+    assert parent["acceptance_outcome"] == "rejected" and parent["revision_created"] is True
+    assert parent["replacing_version_no"] == 2
+    assert parent["acceptance_results"] == results
+    assert parent["acceptance_note"] == "字体都是歪的，都是反的。"
+    listed = {item["id"]: item for item in review.client.get("/api/v1/runs").json()["runs"]}
+    assert listed["parent-closed"]["replacing_version_no"] == 2
+    assert listed["parent-closed"]["current_stage"] == "awaiting_acceptance"
+    assert listed["child-open"]["replacing_version_no"] is None
+
+
 def test_other_scenario_failure_does_not_reject_a_passed_main_flow(review):
     results = [
         {"scenario_id": "scenario-1", "passed": True, "observation": "主流程走通"},

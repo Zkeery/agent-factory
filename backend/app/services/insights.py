@@ -13,8 +13,8 @@ from app.core.errors import AppError
 from app.models import FactoryRun, ProductProject, RunMetric, StageEvent
 from app.services.project_lifecycle import active_run_filter
 from app.services.metrics import configured_currency, pricing_snapshots, run_source
-from app.services.iteration import acceptance_outcome, parents_with_revisions
-from app.services.version_visibility import visible_parent_ids
+from app.services.iteration import acceptance_outcome, parents_with_revisions, replacement_version_numbers
+from app.services.version_visibility import visible_parent_ids, visible_version_filter
 
 SOURCES = {"real", "mock", "unknown", "all"}
 DAYS = {"7", "30", "90", "all"}
@@ -195,7 +195,9 @@ def build_review(session: Session, user_id: str, *, source: str = "real", days: 
         if project is None or project.user_id != user_id or project.deleted_at is not None:
             raise AppError("project_not_found", "项目不存在", 404)
     now = _utc(now or datetime.now(timezone.utc))
-    query = session.query(FactoryRun).filter(FactoryRun.user_id == user_id, FactoryRun.created_at <= now, active_run_filter())
+    query = session.query(FactoryRun).filter(
+        FactoryRun.user_id == user_id, FactoryRun.created_at <= now, active_run_filter(), visible_version_filter(),
+    )
     if days != "all":
         query = query.filter(FactoryRun.created_at >= now - timedelta(days=int(days)))
     if project_id is not None:
@@ -204,14 +206,26 @@ def build_review(session: Session, user_id: str, *, source: str = "real", days: 
     metric_map, duplicate_metrics = _metric_map(session, {run.id for run in cohort})
     sources = {run.id: run_source(run, metric_map.get(run.id)) for run in cohort}
     runs = [run for run in cohort if source == "all" or sources[run.id] == source]
-    counts = {"total": len(runs), "delivered": 0, "failed": 0, "cancelled": 0, "pending": 0,
+    revised = parents_with_revisions(session, [run.id for run in runs])
+    replacements = replacement_version_numbers(session, [run for run in runs if run.id in revised])
+    counts = {"total": len(runs), "delivered": 0, "failed": 0, "cancelled": 0, "pending": 0, "replaced": 0,
               "real": 0, "mock": 0, "unknown": 0}
     rows = []
     currency = configured_currency()
     interrupted_count = 0
     for run in runs:
         counts[sources[run.id]] += 1
-        status = "delivered" if run.current_stage == "delivered" else "failed" if run.current_stage in FAILED_STAGES else "cancelled" if run.current_stage == "cancelled" else "pending"
+        closed = acceptance_outcome(run) == "rejected" and run.id in revised
+        if run.current_stage == "delivered":
+            status = "delivered"
+        elif run.current_stage in FAILED_STAGES:
+            status = "failed"
+        elif run.current_stage == "cancelled":
+            status = "cancelled"
+        elif closed:
+            status = "replaced"
+        else:
+            status = "pending"
         counts[status] += 1
         created = _utc(run.created_at)
         accepted = _utc(run.accepted_at) if run.accepted_at else None
@@ -229,7 +243,8 @@ def build_review(session: Session, user_id: str, *, source: str = "real", days: 
             "accounting_version": metric.accounting_version or 0 if metric else 0,
             "parent_run_id": run.parent_run_id,
             "acceptance_outcome": acceptance_outcome(run),
-            "revision_created": False,
+            "revision_created": run.id in revised,
+            "replacing_version_no": replacements.get(run.id),
         })
     run_ids = {run.id for run in runs}
     latest_checks = {}
@@ -253,8 +268,8 @@ def build_review(session: Session, user_id: str, *, source: str = "real", days: 
     execution_values = [row["execution_seconds"] for row in rows if row["execution_seconds"] is not None]
     costs = [row["estimated_cost"] for row in rows if row["estimated_cost"] is not None]
     notes = [
-        "统计按 Run 创建时间选队列，使用 UTC 滚动时间窗，起止时刻均包含；结果截至 generated_at。每个版本是一条 Run。",
-        "执行耗时不含人工等待；交付耗时包含等待，仅有有效验收时间的已交付样本参与。尚未结束的 Run 不进交付率分母。",
+        "统计按 Run 创建时间选队列，且只计入版本列表里仍可见的运行。整段重跑后不再展示的失败版本不进入总数、失败数或交付率。使用 UTC 滚动时间窗，起止时刻均包含；结果截至 generated_at。每个版本是一条 Run。",
+        "执行耗时不含人工等待；交付耗时包含等待，仅有有效验收时间的已交付样本参与。尚未结束的 Run 不进交付率分母。验收未通过且已由修改版替代的版本已结束，不再计入待完成，也不进入交付率分母。",
         "成本仅按模型返回的已记录 token 和当段配置单价估算；未返回 usage 的调用不计，不代表供应商实际账单。",
         "迭代按父子版本对计数，以输入和预期结果一致为可比条件；同 ID 改任务不算修复。无基线或未复验不视为改善。",
         "新增失败指父版已通过的同场景或本版新增场景出现失败观察；父版未验证的场景不作退步判断。",
@@ -278,23 +293,17 @@ def build_review(session: Session, user_id: str, *, source: str = "real", days: 
         notes.append(f"{missing_baselines} 条修改版缺少父快照中的实际观察，未生成迭代效果结论。")
     if duplicate_metrics:
         notes.append(f"队列内 {duplicate_metrics} 条 Run 存在多条累计度量记录，未任选或相加，以免重复计数。")
-    shown_rows = [row for row, run in zip(rows, runs) if not run.superseded_by_run_id]
-    hidden_from_list = len(rows) - len(shown_rows)
-    if hidden_from_list:
-        notes.append(f"{hidden_from_list} 条已被整段重跑替代的失败版本仍计入上方统计，不再列入版本记录。")
-    resolved_parents = visible_parent_ids(session, [row["parent_run_id"] for row in shown_rows])
-    revised = parents_with_revisions(session, [row["run_id"] for row in shown_rows])
-    for row in shown_rows:
-        row["revision_created"] = row["run_id"] in revised
-    for row in shown_rows:
+    if counts["replaced"]:
+        notes.append(f"{counts['replaced']} 条验收未通过的版本已由修改版替代，记为已结束，不再计入待完成，也不进入交付率分母。")
+    resolved_parents = visible_parent_ids(session, [row["parent_run_id"] for row in rows])
+    for row in rows:
         if row["parent_run_id"]:
             row["parent_run_id"] = resolved_parents.get(row["parent_run_id"], row["parent_run_id"])
-    rows = shown_rows
     return {
         "generated_at": now, "filters": {"source": source, "days": days, "project_id": project_id},
         "counts": counts,
         "metrics": {
-            "delivery_rate": _ratio(counts["delivered"], terminal, counts["pending"], "人工交付 Run / 已结束 Run（交付、失败、取消）；运行中与等待人工处理另列，不进分母。"),
+            "delivery_rate": _ratio(counts["delivered"], terminal, counts["pending"] + counts["replaced"], "人工交付 Run / 已结束 Run（交付、失败、取消）。运行中、等待人工处理，以及验收未通过后已由修改版替代的版本另列，不进分母。"),
             "automatic_check_rate": _ratio(sum(checks), len(checks), len(runs) - len(checks), "最后一条自动检查记录明确通过的 Run / 最后一条检查记录结果可识别的 Run；不跳过未知结果回看旧通过记录，独立于人工验收。"),
             "delivery_seconds": _median(delivery_values, counts["delivered"], "已人工交付且有有效 accepted_at 的 Run，从创建到验收的经过秒数中位数，包含人工等待。"),
             "execution_seconds": _median(execution_values, len(runs), "有新版完整计时的 Run 累计执行秒数中位数，含已记录失败和取消执行段，不含人工等待。"),

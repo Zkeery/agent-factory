@@ -102,6 +102,7 @@ export interface Run {
   accepted_at?: string | null;
   acceptance_outcome?: AcceptanceOutcome | null;
   revision_created?: boolean;
+  replacing_version_no?: number | null;
   prd_revision?: number;
   decisions: Decision[];
   evidence: Evidence[];
@@ -129,6 +130,7 @@ export interface RunSummary {
   version_no?: number;
   acceptance_outcome?: AcceptanceOutcome | null;
   revision_created?: boolean;
+  replacing_version_no?: number | null;
 }
 
 export interface RunList {
@@ -553,6 +555,14 @@ export function pmFailureText(code?: string | null, reason?: string | null): { m
       suggestion: "查看协作记录中的检查报错，收窄需求或创建修改版本",
     };
   }
+  if ((code === "prd_content_incomplete" || code === "llm_output_invalid") && text.trim()) {
+    return {
+      message: text.trim(),
+      suggestion: code === "prd_content_incomplete"
+        ? "按说明补上缺的章节或验收项，也可以整段重跑再生成一次"
+        : "整段重跑再生成一次。若反复出现，把需求收成一个页面里能完成的主路径",
+    };
+  }
   if (code === "agent_execution_failed" && budgetCallLimit(text)) {
     if (text.includes("还没有可检查") || text.includes("没有可检查的源码")) {
       return {
@@ -637,6 +647,7 @@ export function acceptanceStatusText(input: {
   stage?: string | null;
   acceptance_outcome?: AcceptanceOutcome | null;
   revision_created?: boolean;
+  replacing_version_no?: number | null;
   accepted_at?: string | null;
   acceptance_scenarios?: AcceptanceScenario[];
   acceptance_results?: AcceptanceScenarioResult[];
@@ -649,6 +660,11 @@ export function acceptanceStatusText(input: {
   if (outcome === "accepted" || stage === "delivered") return null;
   if (outcome !== "rejected" && stage !== "awaiting_acceptance") return null;
   const base = outcome === "rejected" ? "验收未通过" : "待验收";
+  if (input.revision_created && stage === "awaiting_acceptance" && outcome === "rejected") {
+    return input.replacing_version_no
+      ? `验收未通过 · 已由第 ${input.replacing_version_no} 版替代`
+      : "验收未通过 · 已由修改版替代";
+  }
   return input.revision_created && stage === "awaiting_acceptance" ? `${base} · 已生成修改版` : base;
 }
 
@@ -677,7 +693,7 @@ function inferAcceptanceOutcome(input: {
 }
 
 export function userStageLabel(
-  run: { current_stage: Stage | string; acceptance_outcome?: AcceptanceOutcome | null; revision_created?: boolean; accepted_at?: string | null; acceptance_scenarios?: AcceptanceScenario[]; acceptance_results?: AcceptanceScenarioResult[]; acceptance_checklist?: AcceptanceChecklistItem[] },
+  run: { current_stage: Stage | string; acceptance_outcome?: AcceptanceOutcome | null; revision_created?: boolean; replacing_version_no?: number | null; accepted_at?: string | null; acceptance_scenarios?: AcceptanceScenario[]; acceptance_results?: AcceptanceScenarioResult[]; acceptance_checklist?: AcceptanceChecklistItem[] },
   role: ViewRole = "pm",
 ): string {
   if (run.acceptance_outcome === "accepted" || run.accepted_at || run.current_stage === "delivered") return "已交付";

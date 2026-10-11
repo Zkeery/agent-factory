@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.models import Confirmation, Decision, EvidenceItem, FactoryRun, SessionLocal, StageEvent, init_db
 from app.services import agent_harness, deploy, evidence, failure_reasons, gates, iteration, llm, metrics, testing
+from app.services.codegen_guard import repair_embedded_js_newlines
 from app.services.prd_normalize import normalize_prd_fields
 from app.services.decision_context import decision_model_context
 from app.services.stages import NEXT_STAGE, TERMINAL_STAGES, Stage
@@ -52,7 +53,8 @@ def _write_code(run: FactoryRun, code: dict[str, str]) -> str:
     if not d.is_relative_to(DATA_ROOT.resolve()):
         raise AppError("invalid_run_dir", "非法运行目录", 500)
     d.mkdir(parents=True, exist_ok=True)
-    (d / "app.py").write_text(code.get("app", ""), encoding="utf-8")
+    app_source = repair_embedded_js_newlines(code.get("app", ""))
+    (d / "app.py").write_text(app_source, encoding="utf-8")
     (d / "requirements.txt").write_text(code.get("requirements", ""), encoding="utf-8")
     (d / "README.md").write_text(code.get("readme", ""), encoding="utf-8")
     return str(d / "app.py")

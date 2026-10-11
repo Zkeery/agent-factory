@@ -90,6 +90,7 @@ def _run_out(session: Session, run: FactoryRun) -> RunOut:
     metric = session.query(RunMetric).filter(RunMetric.run_id == run.id).first()
     shown_number, shown_parent = presentation(session, [run])[run.id]
     revised = iteration.parents_with_revisions(session, [run.id])
+    replacements = iteration.replacement_version_numbers(session, [run] if run.id in revised else [])
     return RunOut(
         id=run.id,
         idea=run.idea,
@@ -119,6 +120,7 @@ def _run_out(session: Session, run: FactoryRun) -> RunOut:
         accepted_at=run.accepted_at,
         acceptance_outcome=iteration.acceptance_outcome(run),
         revision_created=run.id in revised,
+        replacing_version_no=replacements.get(run.id),
         decisions=[
             DecisionOut(
                 code=d.code, question=d.question, options=d.options,
@@ -190,12 +192,13 @@ def create_run(body: CreateRunRequest, session: Session = Depends(get_session), 
     return _run_out(session, run)
 
 
-def _run_summary(run: FactoryRun, version_no: int, parent_run_id: str | None, revision_created: bool = False) -> RunSummary:
+def _run_summary(run: FactoryRun, version_no: int, parent_run_id: str | None, revision_created: bool = False, replacing_version_no: int | None = None) -> RunSummary:
     return RunSummary(
         id=run.id, idea=run.idea, current_stage=run.current_stage, status=run.status, created_at=run.created_at,
         project_id=run.project_id, auto_schedule_id=getattr(run, "auto_schedule_id", None), parent_run_id=parent_run_id,
         execution_mode=run.execution_mode or "workflow", version_no=version_no,
         acceptance_outcome=iteration.acceptance_outcome(run), revision_created=revision_created,
+        replacing_version_no=replacing_version_no,
     )
 
 
@@ -206,7 +209,8 @@ def list_runs(session: Session = Depends(get_session), user: User = Depends(get_
     ).order_by(FactoryRun.created_at.desc()).all()
     shown = presentation(session, runs)
     revised = iteration.parents_with_revisions(session, [r.id for r in runs])
-    return RunListOut(runs=[_run_summary(r, *shown[r.id], revision_created=r.id in revised) for r in runs])
+    replacements = iteration.replacement_version_numbers(session, [r for r in runs if r.id in revised])
+    return RunListOut(runs=[_run_summary(r, *shown[r.id], revision_created=r.id in revised, replacing_version_no=replacements.get(r.id)) for r in runs])
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)

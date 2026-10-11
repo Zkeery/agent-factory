@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.errors import AppError
 from app.models import FactoryRun, StageEvent
 from app.services import iteration, testing
+from app.services.codegen_guard import repair_embedded_js_newlines
 
 MAX_TURNS = 8
 MAX_REPAIRS = 3
@@ -316,7 +317,7 @@ def role_tools(role: str) -> list[dict]:
         _tool("handoff", "开发者交给验证者；验证者交回开发者修复，修复轮数有硬上限", {"reason": {"type": "string"}}, ["reason"]),
     ]
     if role == "builder":
-        tools.append(_tool("write_files", "提交完整非空内容。app.py 单独提交；requirements.txt 与 README.md 可以同一次提交。不要一次提交多个大文件，禁止空字符串", {"files": {
+        tools.append(_tool("write_files", "提交完整非空内容。app.py 单独提交；requirements.txt 与 README.md 可以同一次提交。不要一次提交多个大文件，禁止空字符串。HTML/JS 放在 r\"\"\" 原始字符串中，不要在普通三引号里留下未转义换行", {"files": {
             "type": "object", "properties": {name: {"type": "string"} for name in sorted(ALLOWED_FILES)},
             "additionalProperties": False,
         }}, ["files"]))
@@ -339,7 +340,7 @@ def _context(run: FactoryRun, prd: dict, state: dict) -> dict:
         "build_contract": {
             "files": ["app.py", "requirements.txt", "README.md"],
             "order": "没有父版本源码且 files 为空时不要 read_file。先单独写短的 app.py 主路径，再把 requirements.txt 与 README.md 放在同一次 write_files。写完立刻 run_checks，通过后再 handoff。",
-            "scope": "只保证页面和 POST /generate 主路径可运行。付费、海报、分享、账号用简化实现或省略，app.py 必须短到一次输出能写完。",
+            "scope": "只保证页面和 POST /generate 主路径可运行。付费、海报、分享、账号用简化实现或省略，app.py 必须短到一次输出能写完。内嵌页面用 r\"\"\"，避免 JS 字符串里出现真换行。",
         },
     }
 
@@ -443,6 +444,13 @@ def _execute_tool(session: Session, run: FactoryRun, state: dict, task: dict, st
         blank = sorted(name for name, content in files.items() if not content.strip())
         if blank:
             raise ValueError("拒绝写入空文件：" + "、".join(blank) + "。请提交完整非空内容")
+        repaired = []
+        if isinstance(files.get("app.py"), str):
+            fixed = repair_embedded_js_newlines(files["app.py"])
+            if fixed != files["app.py"]:
+                files = {**files, "app.py": fixed}
+                repaired.append("app.py")
+                logger.info("写文件时已修正 app.py 里嵌入 JS 的未转义换行")
         # 先验证全部路径，再写入；每个文件以 replace 提交。中断时可幂等重放同一调用。
         paths = {name: _path(run.id, name) for name in files}
         for name, path in paths.items():
@@ -455,7 +463,9 @@ def _execute_tool(session: Session, run: FactoryRun, state: dict, task: dict, st
                 temp.unlink(missing_ok=True)
         state["last_check"] = None
         step["summary"] = "提交源码：" + "、".join(sorted(files))
-        return {"written": sorted(files), "source_hash": source_hash(run.id)}
+        if repaired:
+            step["summary"] += "（已修正嵌入 JS 的未转义换行）"
+        return {"written": sorted(files), "source_hash": source_hash(run.id), "js_newline_repaired": repaired}
     if name == "run_checks":
         snapshot = source_hash(run.id)
         passed, diagnosis = testing.run_tests(run.id, idea=run.idea, output_type=prd.get("output_type"))

@@ -12,7 +12,7 @@ const metric = (patch: Partial<ReviewMetric> = {}): ReviewMetric => ({
 const snapshot: ProjectReviewData = {
   generated_at: "2026-10-05T12:00:00Z",
   filters: { source: "real", days: "all", project_id: "project-1" },
-  counts: { total: 2, delivered: 0, failed: 1, cancelled: 0, pending: 1, real: 2, mock: 0, unknown: 0 },
+  counts: { total: 2, delivered: 0, failed: 1, cancelled: 0, pending: 1, replaced: 0, real: 2, mock: 0, unknown: 0 },
   metrics: {
     delivery_rate: metric({ value: 0, numerator: 0, denominator: 1, samples: 1 }),
     automatic_check_rate: metric({ value: 0.5, numerator: 1, denominator: 2, samples: 2, excluded: 0 }),
@@ -103,7 +103,9 @@ describe("复盘口径与导出", () => {
         revision_created: true,
       }],
     };
-    expect(projectReviewCsv(rejected)).toContain('"验收未通过 · 已生成修改版"');
+    expect(projectReviewCsv(rejected)).toContain('"验收未通过 · 已由修改版替代"');
+    const numbered = { ...rejected, rows: [{ ...rejected.rows[0], replacing_version_no: 2 }] };
+    expect(projectReviewCsv(numbered)).toContain('"验收未通过 · 已由第 2 版替代"');
   });
 
   it("CSV对想法里的公式前缀和引号换行安全转义，不改原记录", () => {

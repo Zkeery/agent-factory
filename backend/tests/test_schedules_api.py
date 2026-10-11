@@ -46,6 +46,11 @@ def test_unfinished_schedule_run_is_visible(client, session):
     item = next(row for row in client.get("/api/v1/schedules").json() if row["id"] == created["id"])
     assert item["pending_run_id"] == "bath-wait"
     assert item["pending_run_stage"] == "awaiting_answers"
+    patched = client.patch(f"/api/v1/schedules/{created['id']}", json={"idea": "洗澡提醒"}).json()
+    assert patched["pending_run_id"] == "bath-wait"
+    assert patched["pending_run_stage"] == "awaiting_answers"
+    created_again = client.post("/api/v1/schedules", json={"idea": "另一件", "trigger_time": "08:15"}).json()
+    assert created_again["pending_run_id"] is None
     assert item["last_skip_reason"] == "上一次仍在等待回答"
     assert item["last_skipped_at"].startswith("2026-10-10T12:32:00")
     assert item["last_skipped_at"].endswith("+00:00") or item["last_skipped_at"].endswith("Z")

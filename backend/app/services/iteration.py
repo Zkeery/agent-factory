@@ -163,3 +163,37 @@ def parents_with_revisions(session, parent_ids) -> set[str]:
         return set()
     rows = session.query(FactoryRun.parent_run_id).filter(FactoryRun.parent_run_id.in_(ids)).distinct().all()
     return {row[0] for row in rows if row[0]}
+
+
+def replacement_version_numbers(session, runs) -> dict[str, int]:
+    """验收未通过且已有修改版时，最新可见子版本的展示序号。
+
+    历史数据按现有父子关系计算，不改运行阶段。没有项目归属时，展示序号规则与版本列表相同。
+    """
+    from app.models import FactoryRun
+    from app.services.version_visibility import presentation, visible_version_filter
+
+    parents = [run for run in runs if acceptance_outcome(run) == "rejected"]
+    parent_ids = {run.id for run in parents}
+    if not parent_ids:
+        return {}
+    children = (
+        session.query(FactoryRun)
+        .filter(FactoryRun.parent_run_id.in_(parent_ids), visible_version_filter())
+        .all()
+    )
+    if not children:
+        children = session.query(FactoryRun).filter(FactoryRun.parent_run_id.in_(parent_ids)).all()
+    latest: dict[str, FactoryRun] = {}
+    for child in children:
+        current = latest.get(child.parent_run_id)
+        if current is None or (child.created_at, child.id) >= (current.created_at, current.id):
+            latest[child.parent_run_id] = child
+    if not latest:
+        return {}
+    shown = presentation(session, list(latest.values()))
+    return {
+        parent_id: shown[child.id][0]
+        for parent_id, child in latest.items()
+        if shown.get(child.id, (0, None))[0]
+    }

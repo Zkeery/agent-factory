@@ -54,6 +54,83 @@ def _js_string_has_raw_newline(script: str) -> bool:
     return False
 
 
+def _escape_js_string_newlines(script: str, *, raw: bool) -> str:
+    """JS 引号字符串里的真换行改成源码转义。raw 字符串保留 \\n；普通字符串写成 \\\\n，运行后仍是 \\n。"""
+    escape = "\\n" if raw else "\\\\n"
+    out: list[str] = []
+    i = 0
+    n = len(script)
+    while i < n:
+        ch = script[i]
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            while i < n:
+                c = script[i]
+                if c == "\\":
+                    out.append(c)
+                    if i + 1 < n:
+                        out.append(script[i + 1])
+                    i += 2
+                    continue
+                if c == quote:
+                    out.append(c)
+                    i += 1
+                    break
+                if c == "\r":
+                    i += 1
+                    if i < n and script[i] == "\n":
+                        i += 1
+                    out.append(escape)
+                    continue
+                if c == "\n":
+                    out.append(escape)
+                    i += 1
+                    continue
+                out.append(c)
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def repair_embedded_js_newlines(source: str) -> str:
+    """写文件前修正「普通三引号里 JS 字符串跨真换行」。已经安全的源码原样返回。"""
+    if not source or "<script" not in source.lower():
+        return source
+    pieces: list[str] = []
+    last = 0
+    changed = False
+    for match in _TRIPLE.finditer(source):
+        prefix = match.group("prefix") or ""
+        body = match.group("body") or ""
+        if "<script" not in body.lower():
+            continue
+        raw = "r" in prefix.lower()
+        chunks = _script_chunks(body)
+        if not any(_js_string_has_raw_newline(chunk) for chunk in chunks):
+            continue
+        rebuilt = body
+        for chunk in chunks:
+            if not _js_string_has_raw_newline(chunk):
+                continue
+            fixed = _escape_js_string_newlines(chunk, raw=raw)
+            if fixed != chunk:
+                rebuilt = rebuilt.replace(chunk, fixed, 1)
+        if rebuilt == body:
+            continue
+        pieces.append(source[last:match.start("body")])
+        pieces.append(rebuilt)
+        last = match.end("body")
+        changed = True
+    if not changed:
+        return source
+    pieces.append(source[last:])
+    return "".join(pieces)
+
+
 def check_embedded_js_safety(app_py_source: str) -> tuple[bool, str]:
     """探测非 raw 三引号中嵌入的 <script> 是否含「字符串跨真换行」。"""
     if not app_py_source:
